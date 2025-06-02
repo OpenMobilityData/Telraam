@@ -75,7 +75,7 @@ end
 allDates = [];
 locationNames = fieldnames(locationData);
 for i = 1:length(locationNames)
-    dates = locationData.(locationNames{i}).data.Date;
+    dates = locationData.(locationNames{i}).data.('Date and Time (Local)');
     allDates = [allDates; dates];
 end
 
@@ -128,7 +128,7 @@ function inputTable = loadSingleLocationData(location, analysis)
     inputTable2025 = loadYearData(location.fileStem2025, 2025);
     
     % Combine and convert to timetable
-    columnsToKeep = {'Uptime','Date','Bike Total','PedestrianTotal',...
+    columnsToKeep = {'Uptime','Date and Time (Local)','Bike Total','Pedestrian Total',...
                      'Night Total','Speed V85 km/h','Car Total','Large vehicle Total'};
     inputTable2024 = inputTable2024(:,columnsToKeep);
     inputTable2025 = inputTable2025(:,columnsToKeep);
@@ -137,8 +137,8 @@ function inputTable = loadSingleLocationData(location, analysis)
     inputTable = table2timetable(combinedTable);
     
     % Apply date range filter
-    inputTable = inputTable(inputTable.Date >= analysis.startTime & ...
-                           inputTable.Date <= analysis.endTime, :);
+    inputTable = inputTable(inputTable.('Date and Time (Local)') >= analysis.startTime & ...
+                           inputTable.('Date and Time (Local)') <= analysis.endTime, :);
 end
 
 function yearTable = loadYearData(fileStem, targetYear)
@@ -149,153 +149,16 @@ function yearTable = loadYearData(fileStem, targetYear)
     opts.VariableNamingRule = 'preserve';
     yearTable = readtable(excelFileName, opts);
     
-    % Debug: Show available column names
-    %fprintf('Available columns in %s:\n', excelFileName);
-    %disp(yearTable.Properties.VariableNames);
-    
-    % Find the date column - try multiple possible names
-    dateColumns = {'DateAndTime (Local)', 'DateAndTime_Local_', 'Date', 'DateAndTime', 'DateTime','Date and Time (Local)'};
-    dateColFound = false;
-    
-    for i = 1:length(dateColumns)
-        if ismember(dateColumns{i}, yearTable.Properties.VariableNames)
-            if ~strcmp(dateColumns{i}, 'Date')  % Only rename if it's not already 'Date'
-                yearTable = renamevars(yearTable, dateColumns{i}, 'Date');
-            end
-            dateColFound = true;
-            fprintf('Found date column: %s\n', dateColumns{i});
-            break;
-        end
-    end
-    
-    if ~dateColFound
-        error('Could not find a date column in %s. Available columns are: %s', ...
-            excelFileName, strjoin(yearTable.Properties.VariableNames, ', '));
-    end
-    
-    % Find and rename speed column
-    speedColumns = {'SpeedV85 (Km/h)', 'SpeedV85Km_h', 'SpeedV85', 'Speed V85', 'V85','Speed V85 km/h'};
-    speedColFound = false;
-    
-    for i = 1:length(speedColumns)
-        if ismember(speedColumns{i}, yearTable.Properties.VariableNames)
-            if ~strcmp(speedColumns{i}, 'SpeedV85')  % Only rename if it's not already 'SpeedV85'
-                yearTable = renamevars(yearTable, speedColumns{i}, 'Speed V85 km/h');
-            end
-            speedColFound = true;
-            fprintf('Found speed column: %s\n', speedColumns{i});
-            break;
-        end
-    end
-    
-    if ~speedColFound
-        fprintf('Warning: No speed column found. Creating dummy SpeedV85 column.\n');
-        yearTable.SpeedV85 = nan(height(yearTable), 1);
-    end
-    
-    % Compute missing variables
+    % Uptime is no longer numeric - should remove
     if ismember('Uptime', yearTable.Properties.VariableNames)
         yearTable.Uptime = ones(size(yearTable.Uptime));
     else
         yearTable.Uptime = ones(height(yearTable), 1);
     end
-    
-    % Check if the required columns exist before computing - handle original names
-    nightColsA = {'ModeNight (A→B)', 'ModeNight_A_B_'};
-    nightColsB = {'ModeNight (B→A)', 'ModeNight_B_A_'};
-    
-    nightColA = '';
-    nightColB = '';
-    for i = 1:length(nightColsA)
-        if ismember(nightColsA{i}, yearTable.Properties.VariableNames)
-            nightColA = nightColsA{i};
-            break;
-        end
-    end
-    for i = 1:length(nightColsB)
-        if ismember(nightColsB{i}, yearTable.Properties.VariableNames)
-            nightColB = nightColsB{i};
-            break;
-        end
-    end
-    
-    if ~isempty(nightColA) && ~isempty(nightColB)
-        yearTable.NightTotal_10Modes_ = yearTable.(nightColA) + yearTable.(nightColB);
-    else
-        yearTable.NightTotal_10Modes_ = zeros(height(yearTable), 1);
-    end
-    
-    % Handle bicycle columns
-    bikeColsA = {'ModeBicycle (A→B)', 'ModeBicycle_A_B_'};
-    bikeColsB = {'ModeBicycle (B→A)', 'ModeBicycle_B_A_'};
-    
-    bikeColA = '';
-    bikeColB = '';
-    for i = 1:length(bikeColsA)
-        if ismember(bikeColsA{i}, yearTable.Properties.VariableNames)
-            bikeColA = bikeColsA{i};
-            break;
-        end
-    end
-    for i = 1:length(bikeColsB)
-        if ismember(bikeColsB{i}, yearTable.Properties.VariableNames)
-            bikeColB = bikeColsB{i};
-            break;
-        end
-    end
-    
-    if ~isempty(bikeColA) && ~isempty(bikeColB)
-        yearTable.BicycleTotal_10Modes_ = yearTable.(bikeColA) + yearTable.(bikeColB);
-    else
-        yearTable.BicycleTotal_10Modes_ = zeros(height(yearTable), 1);
-    end
-    
-    % Handle car columns
-    carColsA = {'ModeCar (A→B)', 'ModeCar_A_B_', 'CarTotal'};
-    carColsB = {'ModeCar (B→A)', 'ModeCar_B_A_'};
-    
-    carColA = '';
-    carColB = '';
-    for i = 1:length(carColsA)
-        if ismember(carColsA{i}, yearTable.Properties.VariableNames)
-            carColA = carColsA{i};
-            break;
-        end
-    end
-    for i = 1:length(carColsB)
-        if ismember(carColsB{i}, yearTable.Properties.VariableNames)
-            carColB = carColsB{i};
-            break;
-        end
-    end
-    
-    if ~isempty(carColA) && ~isempty(carColB)
-        yearTable.CarTotal = yearTable.(carColA) + yearTable.(carColB);
-    elseif ismember('CarTotal', yearTable.Properties.VariableNames)
-        % CarTotal already exists, keep it
-    else
-        yearTable.CarTotal = zeros(height(yearTable), 1);
-    end
-    
-    % Handle pedestrian columns
-    pedCols = {'PedestrianTotal', 'Pedestrian Total'};
-    pedCol = '';
-    for i = 1:length(pedCols)
-        if ismember(pedCols{i}, yearTable.Properties.VariableNames)
-            pedCol = pedCols{i};
-            break;
-        end
-    end
-    
-    if ~isempty(pedCol)
-        yearTable.PedestrianTotal = yearTable.(pedCol);
-    else
-        yearTable.PedestrianTotal = zeros(height(yearTable), 1);
-    end
-    
+
     % Convert dates and filter by year
-    yearTable.Date = datetime(char(yearTable.Date),'Format','yy-MM-dd HH:mm');
-    yearTable = yearTable(year(yearTable.Date) == targetYear, :);
+    yearTable.('Date and Time (Local)') = datetime(char(yearTable.('Date and Time (Local)')),'Format','yy-MM-dd HH:mm');
+    yearTable = yearTable(year(yearTable.('Date and Time (Local)')) == targetYear, :);
 end
 
 function processedTable = processTelraamData(inputTable, analysis)
@@ -312,11 +175,11 @@ end
 function inputTable = addTemporalColumns(inputTable)
     weekdays = {'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'};
     
-    inputTable.dayOfWeek = string(day(inputTable.Date,'name'));
+    inputTable.dayOfWeek = string(day(inputTable.('Date and Time (Local)'),'name'));
     inputTable.dayOfWeekCat = categorical(inputTable.dayOfWeek);
-    inputTable.weekOfYear = week(inputTable.Date,'iso-weekofyear');
+    inputTable.weekOfYear = week(inputTable.('Date and Time (Local)'),'iso-weekofyear');
     inputTable.isWeekday = ismember(inputTable.dayOfWeekCat, weekdays);
-    inputTable.weekStartDateTimes = dateshift(dateshift(inputTable.Date,'dayofweek','Monday','previous'),'start','day');
+    inputTable.weekStartDateTimes = dateshift(dateshift(inputTable.('Date and Time (Local)'),'dayofweek','Monday','previous'),'start','day');
     inputTable.Daylight = ~((inputTable.('Night Total') > 0) | (isnan(inputTable.('Speed V85 km/h'))));
     inputTable.DaylightUptime = inputTable.Daylight .* inputTable.Uptime;
     
@@ -325,8 +188,8 @@ function inputTable = addTemporalColumns(inputTable)
 end
 
 function inputTable = fixWeekNumbering(inputTable)
-    inputTable.weekOfYear((month(inputTable.Date)==12) & (inputTable.weekOfYear==1)) = 53;
-    inputTable.weekOfYear((month(inputTable.Date)==1) & (inputTable.weekOfYear==1)) = 53;
+    inputTable.weekOfYear((month(inputTable.('Date and Time (Local)'))==12) & (inputTable.weekOfYear==1)) = 53;
+    inputTable.weekOfYear((month(inputTable.('Date and Time (Local)'))==1) & (inputTable.weekOfYear==1)) = 53;
     inputTable.yearOfMondayInWeek = year(inputTable.weekStartDateTimes);
     januaryIndicesToChange = (month(inputTable.weekStartDateTimes)==1) & (inputTable.weekOfYear==53);
     inputTable.yearOfMondayInWeek(januaryIndicesToChange) = inputTable.yearOfMondayInWeek(januaryIndicesToChange) - 1;
@@ -354,7 +217,7 @@ function inputTable = applyDaylightCorrections(inputTable, analysis)
     inputTableWE.AdjustedCountsUptimeDaylight = inputTableWE.AdjustedCountsUptime .* analysis.daylightCorrectionRatioWE;
     
     % Recombine
-    inputTable = sortrows([inputTableWD; inputTableWE], 'Date');
+    inputTable = sortrows([inputTableWD; inputTableWE], 'Date and Time (Local)');
 end
 
 function plotCombinedDaily(locationData, weatherData, analysis, plots, style)
@@ -425,14 +288,17 @@ function dailyData = calculateDailyTotals(locationDataStruct, analysis)
     data = locationDataStruct.data;
     
     % Create daily grouping
-    data.DayOnly = dateshift(data.Date, 'start', 'day');
+    data.DayOnly = dateshift(data.('Date and Time (Local)'), 'start', 'day');
     
     % Calculate raw daily totals
     groupedData = groupsummary(data, 'DayOnly', 'sum', analysis.modeString);
     
     % Calculate adjusted daily totals (for times up to cutoff)
-    truncatedData = data(timeofday(data.Date) <= analysis.truncationCutoffTime, :);
+    truncatedData = data(timeofday(data.('Date and Time (Local)')) <= analysis.truncationCutoffTime, :);
     adjustedGrouped = groupsummary(truncatedData, 'DayOnly', 'sum', 'AdjustedCountsUptimeDaylight');
+    
+    % Also get daylight data counts per day to identify days with no daylight data
+    daylightGrouped = groupsummary(data, 'DayOnly', 'sum', 'Daylight');
     
     % Combine results
     dailyData = struct();
@@ -449,6 +315,17 @@ function dailyData = calculateDailyTotals(locationDataStruct, analysis)
     
     % Ensure adjusted is at least as large as raw
     dailyData.adjustedCounts = max(dailyData.rawCounts, adjustedCounts);
+    
+    % Filter out days with no daylight data (sum_Daylight = 0)
+    [~, ic, id] = intersect(groupedData.DayOnly, daylightGrouped.DayOnly);
+    daylightCounts = zeros(size(dailyData.rawCounts));
+    daylightCounts(ic) = daylightGrouped.sum_Daylight(id);
+    
+    % Keep only days that have some daylight data
+    validDays = daylightCounts > 0;
+    dailyData.dates = dailyData.dates(validDays);
+    dailyData.rawCounts = dailyData.rawCounts(validDays);
+    dailyData.adjustedCounts = dailyData.adjustedCounts(validDays);
 end
 
 function weatherHandles = plotWeatherData(weatherData, plots, style)
