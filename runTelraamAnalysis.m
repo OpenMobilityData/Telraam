@@ -4,29 +4,40 @@
 clear all; close all; clc;
 
 %% Configuration Setup
+
+westernSegmentName = 'rue de Terrebonne @ King Edward';
+easternSegmentName = 'rue de Terrebonne @ Draper';
+
 % Locations to analyze
 locations = {
-    struct('name', 'Eastern Segment', ...
+    struct('name', easternSegmentName, ...
            'fileStem2024', 'telraam-raw-data-2024East60', ...
            'fileStem2025', 'telraam-raw-data-2025East60', ...
            'plotColor', [0 0 1]);  % Blue
-    struct('name', 'Western Segment', ...
+    struct('name', westernSegmentName, ...
            'fileStem2024', 'telraam-raw-data-2024West60', ...
            'fileStem2025', 'telraam-raw-data-2025West60', ...
            'plotColor', [0 0 0]);  % Black
 };
 
 % Analysis parameters
+
+modeString = 'Bike Total'; modeDisplayString = 'Bike Counts';
+%modeString = 'Pedestrian Total'; modeDisplayString = 'Pedestrian Counts';
+%modeString = 'Car Total'; modeDisplayString = 'Car Counts';
+%modeString = 'Large vehicle Total'; modeDisplayString = 'Heavy Truck Counts';
+
 analysis = struct( ...
     'startTime', datetime(2024,08,01,00,00,01), ...
     'endTime', datetime(2025,06,01,23,59,59), ...
-    'modeString', 'Bike Total', ...
-    'modeDisplayString', 'Bike Counts', ...
+    'modeString', modeString, ...
+    'modeDisplayString', modeDisplayString, ...
     'uptimeThreshold', 0.0, ...
     'maxUptimeCorrection', 1.0, ...
     'truncationCutoffTime', timeofday(datetime('today')+hours(15)), ...
     'daylightCorrectionRatioWD', 1.65, ...
-    'daylightCorrectionRatioWE', 1.37 ...
+    'daylightCorrectionRatioWE', 1.37, ...
+    'includePartialMonths', false ...
 );
 
 % Plot configuration - easy to turn elements on/off
@@ -36,7 +47,7 @@ plots = struct( ...
     'showTruncatedCounts', false, ...
     'showWeather', true, ...
     'showPrecipitationBubbles', true, ...  % Turn off for first example
-    'plotTypes', {{'daily'}}, ...  % Only daily for now
+    'plotTypes', {{'daily','weekly','monthly'}}, ...  % Only daily for now
     'combinedPlots', true ...
 );
 
@@ -50,6 +61,17 @@ style = struct( ...
     'axisBackgroundColor', 0.8.*[1 1 1], ...
     'legendBackgroundAlpha', 0.2 ...
 );
+
+% Multi-modal analysis parameters
+multiModal = struct( ...
+    'enabled', true, ...
+    'location', easternSegmentName, ...  % Which location to analyze
+    'modes', {{'Bike Total', 'Pedestrian Total', 'Car Total'}}, ...
+    'modeDisplayNames', {{'Bike Counts', 'Pedestrian Counts', 'Car Counts'}}, ...
+    'modeColors', {{[0 0 1], [0 0.8 0], [1 0 0], [0 0.8 0.8]}}, ...  % Note the double braces
+    'plotWeather', true ...
+);
+
 
 %% Load and Process Data for All Locations
 locationData = struct();
@@ -117,6 +139,19 @@ end
 
 %% Generate Combined Daily Plot
 plotCombinedDaily(locationData, weatherData, analysis, plots, style);
+
+%% Generate Combined Weekly Plot
+plotCombinedWeekly(locationData, weatherData, analysis, plots, style);
+
+%% Generate Combined Monthly Plot
+plotCombinedMonthly(locationData, weatherData, analysis, plots, style);
+
+%% Generate Multi-Modal Plots (if enabled)
+if multiModal.enabled
+    plotMultiModalDaily(locationData, weatherData, analysis, plots, style, multiModal);
+    plotMultiModalWeekly(locationData, weatherData, analysis, plots, style, multiModal);
+    plotMultiModalMonthly(locationData, weatherData, analysis, plots, style, multiModal);
+end
 
 %% ======================== FUNCTIONS ========================
 
@@ -230,6 +265,7 @@ function plotCombinedDaily(locationData, weatherData, analysis, plots, style)
     if plots.showWeather
         yyaxis right
         weatherHandles = plotWeatherData(weatherData, plots, style);
+        %plotHandles = [plotHandles, weatherHandles];
     end
     
     % Plot traffic data on left axis
@@ -274,9 +310,13 @@ function plotCombinedDaily(locationData, weatherData, analysis, plots, style)
     % Format plot
     formatCombinedPlot(analysis, plots, style, weatherData);
     
+    if plots.showWeather
+        plotHandles = [plotHandles, weatherHandles];
+    end
+
     % Add legend
     if ~isempty(plotHandles)
-        legend(plotHandles, 'Location', 'southwest', 'Color', style.axisBackgroundColor, ...
+        legend(plotHandles, 'Location', 'north', 'Color', style.axisBackgroundColor, ...
             'FontSize', style.legendFontSize);
     end
     
@@ -365,7 +405,7 @@ function formatCombinedPlot(analysis, plots, style, weatherData)
     end
     
     % Title and formatting
-    title(['Daily ' analysis.modeDisplayString ' Comparison'], ...
+    title(['Daily ' analysis.modeDisplayString], ...
         'FontSize', style.titleFontSize);
     
     xlabel('Date', 'FontSize', style.labelFontSize);
@@ -495,3 +535,713 @@ function out = num2sepstr(numin, format, sep)
         out = regexprep(out, '(\.\d*[1-9])(0*)', '$1');
     end
 end
+
+function plotCombinedWeekly(locationData, weatherData, analysis, plots, style)
+    figure('Position', [408 126 1132 921]);
+    
+    locationNames = fieldnames(locationData);
+    plotHandles = [];
+    
+    % Plot weather on right axis if enabled
+    if plots.showWeather
+        yyaxis right
+        weatherHandles = plotWeeklyWeatherData(weatherData, plots, style);
+    end
+    
+    % Plot traffic data on left axis
+    yyaxis left
+    hold on
+    
+    for i = 1:length(locationNames)
+        locationName = locationNames{i};
+        data = locationData.(locationName);
+        locationInfo = data.locationInfo;
+        
+        % Calculate weekly totals
+        weeklyData = calculateWeeklyTotals(data, analysis);
+        
+        % Plot raw counts if enabled
+        if plots.showRawCounts
+            h1 = plot(weeklyData.weekStarts, weeklyData.rawCounts, '-', ...
+                'LineWidth', style.plotLineWidth * 0.5, ...
+                'Color', locationInfo.plotColor, ...
+                'DisplayName', sprintf('%s Raw ( Min = %s ; Max = %s ; Total = %s )', ...
+                    locationInfo.name, ...
+                    num2sepstr(min(weeklyData.rawCounts), '%.0f'), ...
+                    num2sepstr(max(weeklyData.rawCounts), '%.0f'), ...
+                    num2sepstr(sum(weeklyData.rawCounts), '%.0f')));
+            plotHandles = [plotHandles, h1];
+        end
+        
+        % Plot adjusted counts if enabled
+        if plots.showAdjustedCounts
+            h2 = plot(weeklyData.weekStarts, weeklyData.adjustedCounts, '--', ...
+                'LineWidth', style.plotLineWidth * 0.3, ...
+                'Color', locationInfo.plotColor * 0.7, ...
+                'DisplayName', sprintf('%s Adjusted ( Min = %s ; Max = %s ; Total = %s )', ...
+                    locationInfo.name, ...
+                    num2sepstr(min(weeklyData.adjustedCounts), '%.0f'), ...
+                    num2sepstr(max(weeklyData.adjustedCounts), '%.0f'), ...
+                    num2sepstr(sum(weeklyData.adjustedCounts), '%.0f')));
+            plotHandles = [plotHandles, h2];
+        end
+    end
+    
+    % Format plot
+    formatCombinedWeeklyPlot(analysis, plots, style, weatherData);
+
+    if plots.showWeather
+        plotHandles = [plotHandles, weatherHandles];
+    end
+
+    % Add legend
+    if ~isempty(plotHandles)
+        legend(plotHandles, 'Location', 'north', 'Color', style.axisBackgroundColor, ...
+            'FontSize', style.legendFontSize);
+    end
+    
+    hold off
+end
+
+function weeklyData = calculateWeeklyTotals(locationDataStruct, analysis)
+    % Extract the data timetable from the structure
+    data = locationDataStruct.data;
+    
+    % Calculate weekly totals using the existing yearWeekKey
+    groupedData = groupsummary(data, 'yearWeekKey', 'sum', analysis.modeString);
+    
+    % Calculate adjusted weekly totals (for times up to cutoff)
+    truncatedData = data(timeofday(data.('Date and Time (Local)')) <= analysis.truncationCutoffTime, :);
+    adjustedGrouped = groupsummary(truncatedData, 'yearWeekKey', 'sum', 'AdjustedCountsUptimeDaylight');
+    
+    % Also get daylight data counts per week to identify weeks with no daylight data
+    daylightGrouped = groupsummary(data, 'yearWeekKey', 'sum', 'Daylight');
+    
+    % Get week start dates for each yearWeekKey
+    weekStartGrouped = groupsummary(data, 'yearWeekKey', 'min', 'weekStartDateTimes');
+    
+    % Combine results
+    weeklyData = struct();
+    weeklyData.yearWeekKeys = groupedData.yearWeekKey;
+    
+    % Use the original column name with groupsummary's 'sum_' prefix
+    sumColumnName = ['sum_' analysis.modeString];
+    weeklyData.rawCounts = groupedData.(sumColumnName);
+    
+    % Get week start dates
+    [~, ia, ib] = intersect(groupedData.yearWeekKey, weekStartGrouped.yearWeekKey);
+    weekStarts = NaT(size(weeklyData.rawCounts));
+    weekStarts(ia) = weekStartGrouped.min_weekStartDateTimes(ib);
+    weeklyData.weekStarts = weekStarts;
+    
+    % Match adjusted counts to raw count weeks
+    [~, ic, id] = intersect(groupedData.yearWeekKey, adjustedGrouped.yearWeekKey);
+    adjustedCounts = nan(size(weeklyData.rawCounts));
+    adjustedCounts(ic) = adjustedGrouped.sum_AdjustedCountsUptimeDaylight(id);
+    
+    % Ensure adjusted is at least as large as raw
+    weeklyData.adjustedCounts = max(weeklyData.rawCounts, adjustedCounts);
+    
+    % Filter out weeks with no daylight data (sum_Daylight = 0)
+    [~, ie, if_] = intersect(groupedData.yearWeekKey, daylightGrouped.yearWeekKey);
+    daylightCounts = zeros(size(weeklyData.rawCounts));
+    daylightCounts(ie) = daylightGrouped.sum_Daylight(if_);
+    
+    % Keep only weeks that have some daylight data
+    validWeeks = daylightCounts > 0;
+    weeklyData.yearWeekKeys = weeklyData.yearWeekKeys(validWeeks);
+    weeklyData.weekStarts = weeklyData.weekStarts(validWeeks);
+    weeklyData.rawCounts = weeklyData.rawCounts(validWeeks);
+    weeklyData.adjustedCounts = weeklyData.adjustedCounts(validWeeks);
+end
+
+function weatherHandles = plotWeeklyWeatherData(weatherData, plots, style)
+    % Aggregate weather data to weekly averages
+    weeklyWeatherData = aggregateWeatherToWeekly(weatherData);
+    
+    % Plot temperature line
+    h1 = plot(weeklyWeatherData.weekStarts, weeklyWeatherData.avgTemperature, '-', ...
+        'LineWidth', style.plotLineWidth * 0.5, ...
+        'Color', [0 0.4471 0.7412 0.3], ...
+        'DisplayName', 'Avg Temperature (°C)');
+    
+    weatherHandles = h1;
+    
+    % Add precipitation bubbles if enabled
+    if plots.showPrecipitationBubbles
+        hold on
+        h2 = bubblechart(weeklyWeatherData.weekStarts, weeklyWeatherData.avgTemperature, weeklyWeatherData.totalPrecipitation, ...
+            'MarkerEdgeColor', 'k', 'MarkerFaceColor', 'c', 'MarkerFaceAlpha', 0.3, ...
+            'DisplayName', 'Total Precipitation (bubble size)');
+        weatherHandles = [weatherHandles, h2];
+        hold off
+    end
+    
+    ylabel('Avg Temperature (°C)', 'FontSize', style.labelFontSize, ...
+        'Color', [1 0 0 0.5] + 0.5.*[0 1 1 0], 'FontWeight', 'bold');
+end
+
+function weeklyWeatherData = aggregateWeatherToWeekly(weatherData)
+    % Create week grouping for weather data
+    tempTable = table(weatherData.dates, weatherData.temperature, weatherData.precipitation, ...
+        'VariableNames', {'dates', 'temperature', 'precipitation'});
+    
+    % Add week start dates
+    tempTable.weekStarts = dateshift(dateshift(tempTable.dates,'dayofweek','Monday','previous'),'start','day');
+    
+    % Group by week
+    weeklyGrouped = groupsummary(tempTable, 'weekStarts', {'mean', 'sum'}, {'temperature', 'precipitation'});
+    
+    weeklyWeatherData = struct();
+    weeklyWeatherData.weekStarts = weeklyGrouped.weekStarts;
+    weeklyWeatherData.avgTemperature = weeklyGrouped.mean_temperature;
+    weeklyWeatherData.totalPrecipitation = weeklyGrouped.sum_precipitation;
+end
+
+function formatCombinedWeeklyPlot(analysis, plots, style, weatherData)
+    % Left axis formatting
+    yyaxis left
+    ylabel(['Total ' analysis.modeDisplayString ' per Week'], ...
+        'FontSize', style.labelFontSize + 2, 'FontWeight', 'bold');
+    
+    ax = gca;
+    ax.FontSize = style.axisFontSize;
+    ax.YAxis(1).Color = 'k';
+    if plots.showWeather
+        ax.YAxis(2).Color = [0 0.4471 0.7412];
+    end
+    
+    % Title and formatting
+    title(['Weekly ' analysis.modeDisplayString], ...
+        'FontSize', style.titleFontSize);
+    
+    xlabel('Week Starting Date', 'FontSize', style.labelFontSize);
+    set(gca, 'Color', style.axisBackgroundColor);
+    grid on;
+    xtickangle(45);
+    
+    % Format y-axis with separators
+    ytick_positions = yticks;
+    ytick_labels = arrayfun(@(v) num2sepstr(v, '%.0f'), ytick_positions, 'UniformOutput', false);
+    yticklabels(ytick_labels);
+    
+    ylim([0 max(ylim) * 1.1]);
+    
+    if ~isempty(weatherData)
+        xlim([weatherData.dates(1) weatherData.dates(end)]);
+    end
+end
+
+function plotCombinedMonthly(locationData, weatherData, analysis, plots, style)
+    figure('Position', [408 126 1132 921]);
+    
+    locationNames = fieldnames(locationData);
+    plotHandles = [];
+    
+    
+
+    % Plot traffic data on left axis
+    yyaxis left
+    hold on
+
+    for i = 1:length(locationNames)
+        locationName = locationNames{i};
+        data = locationData.(locationName);
+        locationInfo = data.locationInfo;
+
+        % Calculate monthly totals
+        monthlyData = calculateMonthlyTotals(data, analysis);
+
+        % Plot raw counts if enabled
+        if plots.showRawCounts
+            h1 = plot(monthlyData.monthStarts, monthlyData.rawCounts, '-', ...
+                'LineWidth', style.plotLineWidth * 0.5, ...
+                'MarkerSize', style.plotLineWidth * 2, ...
+                'Color', locationInfo.plotColor, ...
+                'MarkerFaceColor', locationInfo.plotColor, ...
+                'DisplayName', sprintf('%s Raw ( Min = %s ; Max = %s ; Total = %s )', ...
+                locationInfo.name, ...
+                num2sepstr(min(monthlyData.rawCounts), '%.0f'), ...
+                num2sepstr(max(monthlyData.rawCounts), '%.0f'), ...
+                num2sepstr(sum(monthlyData.rawCounts), '%.0f')));
+            plotHandles = [plotHandles, h1];
+        end
+
+        % Plot adjusted counts if enabled
+        if plots.showAdjustedCounts
+            h2 = plot(monthlyData.monthStarts, monthlyData.adjustedCounts, '--', ...
+                'LineWidth', style.plotLineWidth * 0.3, ...
+                'MarkerSize', style.plotLineWidth * 1.5, ...
+                'Color', locationInfo.plotColor * 0.7, ...
+                'MarkerFaceColor', locationInfo.plotColor * 0.7, ...
+                'DisplayName', sprintf('%s Adjusted ( Min = %s ; Max = %s ; Total = %s )', ...
+                locationInfo.name, ...
+                num2sepstr(min(monthlyData.adjustedCounts), '%.0f'), ...
+                num2sepstr(max(monthlyData.adjustedCounts), '%.0f'), ...
+                num2sepstr(sum(monthlyData.adjustedCounts), '%.0f')));
+            plotHandles = [plotHandles, h2];
+        end
+    end
+
+    % Plot weather on right axis if enabled
+    if plots.showWeather
+        yyaxis right
+        weatherHandles = plotMonthlyWeatherData(weatherData, plots, style, monthlyData.monthStarts);
+    end
+
+    % Format plot
+    formatCombinedMonthlyPlot(analysis, plots, style, weatherData);
+
+    if plots.showWeather
+        plotHandles = [plotHandles, weatherHandles];
+    end
+
+    % Add legend
+    if ~isempty(plotHandles)
+        legend(plotHandles, 'Location', 'north', 'Color', style.axisBackgroundColor, ...
+            'FontSize', style.legendFontSize);
+    end
+    
+    hold off
+end
+
+function monthlyData = calculateMonthlyTotals(locationDataStruct, analysis)
+    % Extract the data timetable from the structure
+    data = locationDataStruct.data;
+    
+    % Create monthly grouping
+    data.monthStartDateTimes = dateshift(data.('Date and Time (Local)'), 'start', 'month');
+    
+    % Determine which months to include based on includePartialMonths flag
+    if analysis.includePartialMonths
+        % Include all months that have any data
+        monthsToInclude = unique(data.monthStartDateTimes);
+    else
+        % Only include complete months based on actual data coverage
+        monthsToInclude = getCompleteMonthsFromData(data);
+    end
+    
+    % Filter data to only include selected months
+    filteredData = data(ismember(data.monthStartDateTimes, monthsToInclude), :);
+    
+    if isempty(filteredData)
+        % Return empty structure if no valid months
+        monthlyData = struct();
+        monthlyData.monthStarts = datetime.empty;
+        monthlyData.rawCounts = [];
+        monthlyData.adjustedCounts = [];
+        return;
+    end
+    
+    % Calculate monthly totals
+    groupedData = groupsummary(filteredData, 'monthStartDateTimes', 'sum', analysis.modeString);
+    
+    % Calculate adjusted monthly totals (for times up to cutoff)
+    truncatedData = filteredData(timeofday(filteredData.('Date and Time (Local)')) <= analysis.truncationCutoffTime, :);
+    adjustedGrouped = groupsummary(truncatedData, 'monthStartDateTimes', 'sum', 'AdjustedCountsUptimeDaylight');
+    
+    % Also get daylight data counts per month to identify months with no daylight data
+    daylightGrouped = groupsummary(filteredData, 'monthStartDateTimes', 'sum', 'Daylight');
+    
+    % Combine results
+    monthlyData = struct();
+    monthlyData.monthStarts = groupedData.monthStartDateTimes;
+    
+    % Use the original column name with groupsummary's 'sum_' prefix
+    sumColumnName = ['sum_' analysis.modeString];
+    monthlyData.rawCounts = groupedData.(sumColumnName);
+    
+    % Match adjusted counts to raw count months
+    [~, ia, ib] = intersect(groupedData.monthStartDateTimes, adjustedGrouped.monthStartDateTimes);
+    adjustedCounts = nan(size(monthlyData.rawCounts));
+    adjustedCounts(ia) = adjustedGrouped.sum_AdjustedCountsUptimeDaylight(ib);
+    
+    % Ensure adjusted is at least as large as raw
+    monthlyData.adjustedCounts = max(monthlyData.rawCounts, adjustedCounts);
+    
+    % Filter out months with no daylight data (sum_Daylight = 0)
+    [~, ic, id] = intersect(groupedData.monthStartDateTimes, daylightGrouped.monthStartDateTimes);
+    daylightCounts = zeros(size(monthlyData.rawCounts));
+    daylightCounts(ic) = daylightGrouped.sum_Daylight(id);
+    
+    % Keep only months that have some daylight data
+    validMonths = daylightCounts > 0;
+    monthlyData.monthStarts = monthlyData.monthStarts(validMonths);
+    monthlyData.rawCounts = monthlyData.rawCounts(validMonths);
+    monthlyData.adjustedCounts = monthlyData.adjustedCounts(validMonths);
+end
+
+function completeMonths = getCompleteMonthsFromData(data)
+    % Determine which months have complete coverage based on actual data
+    
+    % Get the actual date range of the data
+    minDate = min(data.('Date and Time (Local)'));
+    maxDate = max(data.('Date and Time (Local)'));
+    
+    % Get all unique months in the data
+    allMonths = unique(data.monthStartDateTimes);
+    
+    % Check each month for completeness
+    completeMonths = [];
+    
+    for i = 1:length(allMonths)
+        monthStart = allMonths(i);
+        monthEnd = dateshift(monthStart, 'end', 'month');
+        
+        % A month is complete if:
+        % 1. The month start is after or equal to the first full month of data, OR
+        % 2. The month end is before or equal to the last full month of data
+        
+        % First, check if this is the first or last month in the data
+        isFirstMonth = (monthStart == dateshift(minDate, 'start', 'month'));
+        isLastMonth = (monthStart == dateshift(maxDate, 'start', 'month'));
+        
+        if isFirstMonth && isLastMonth
+            % Special case: only one month of data
+            % Include it only if we have data spanning most of the month
+            daysCovered = days(maxDate - minDate) + 1;
+            daysInMonth = day(monthEnd);
+            if daysCovered >= daysInMonth * 0.8  % At least 80% of the month
+                completeMonths = [completeMonths; monthStart];
+            end
+        elseif isFirstMonth
+            % First month: include only if data starts near the beginning
+            if day(minDate) <= 3  % Data starts within first 3 days of month
+                completeMonths = [completeMonths; monthStart];
+            end
+        elseif isLastMonth
+            % Last month: include only if data goes near the end
+            if day(maxDate) >= day(monthEnd) - 2  % Data goes to within 2 days of month end
+                completeMonths = [completeMonths; monthStart];
+            end
+        else
+            % Middle months: these should be complete
+            completeMonths = [completeMonths; monthStart];
+        end
+    end
+end
+
+function weatherHandles = plotMonthlyWeatherData(weatherData, plots, style, monthStarts)
+    % Aggregate weather data to monthly averages
+    monthlyWeatherData = aggregateWeatherToMonthly(weatherData);
+    
+    % Prune to match range of counting data bins
+    keepIx = find(monthlyWeatherData.monthStarts>=min(monthStarts) & monthlyWeatherData.monthStarts<=max(monthStarts));
+
+    % Plot temperature line
+    h1 = plot(monthlyWeatherData.monthStarts(keepIx), monthlyWeatherData.avgTemperature(keepIx), '-', ...
+        'LineWidth', style.plotLineWidth * 0.5, ...
+        'Color', [0 0.4471 0.7412 0.3], ...
+        'DisplayName', 'Avg Temperature (°C)');
+    
+    weatherHandles = h1;
+    
+    % Add precipitation bubbles if enabled
+    if plots.showPrecipitationBubbles
+        hold on
+        h2 = bubblechart(monthlyWeatherData.monthStarts(keepIx), monthlyWeatherData.avgTemperature(keepIx), monthlyWeatherData.totalPrecipitation(keepIx), ...
+            'MarkerEdgeColor', 'k', 'MarkerFaceColor', 'c', 'MarkerFaceAlpha', 0.3, ...
+            'DisplayName', 'Total Precipitation (bubble size)');
+        weatherHandles = [weatherHandles, h2];
+        hold off
+    end
+    
+    ylabel('Avg Temperature (°C)', 'FontSize', style.labelFontSize, ...
+        'Color', [1 0 0 0.5] + 0.5.*[0 1 1 0], 'FontWeight', 'bold');
+end
+
+function monthlyWeatherData = aggregateWeatherToMonthly(weatherData)
+    % Create month grouping for weather data
+    tempTable = table(weatherData.dates, weatherData.temperature, weatherData.precipitation, ...
+        'VariableNames', {'dates', 'temperature', 'precipitation'});
+    
+    % Add month start dates
+    tempTable.monthStarts = dateshift(tempTable.dates, 'start', 'month');
+    
+    % Group by month
+    monthlyGrouped = groupsummary(tempTable, 'monthStarts', {'mean', 'sum'}, {'temperature', 'precipitation'});
+    
+    monthlyWeatherData = struct();
+    monthlyWeatherData.monthStarts = monthlyGrouped.monthStarts;
+    monthlyWeatherData.avgTemperature = monthlyGrouped.mean_temperature;
+    monthlyWeatherData.totalPrecipitation = monthlyGrouped.sum_precipitation;
+end
+
+function formatCombinedMonthlyPlot(analysis, plots, style, weatherData)
+    % Left axis formatting
+    yyaxis left
+    ylabel(['Total ' analysis.modeDisplayString ' per Month'], ...
+        'FontSize', style.labelFontSize + 2, 'FontWeight', 'bold');
+    
+    ax = gca;
+    ax.FontSize = style.axisFontSize;
+    ax.YAxis(1).Color = 'k';
+    if plots.showWeather
+        ax.YAxis(2).Color = [0 0.4471 0.7412];
+    end
+    
+    % Title and formatting
+    if analysis.includePartialMonths
+        monthsTitle = 'Monthly ' + string(analysis.modeDisplayString) + ' (All Months)';
+    else
+        monthsTitle = 'Monthly ' + string(analysis.modeDisplayString) + ' (Complete Months Only)';
+    end
+    title(monthsTitle, 'FontSize', style.titleFontSize);
+    
+    xlabel('Month', 'FontSize', style.labelFontSize);
+    set(gca, 'Color', style.axisBackgroundColor);
+    grid on;
+    xtickangle(45);
+    
+    % Format y-axis with separators
+    ytick_positions = yticks;
+    ytick_labels = arrayfun(@(v) num2sepstr(v, '%.0f'), ytick_positions, 'UniformOutput', false);
+    yticklabels(ytick_labels);
+    
+    ylim([0 max(ylim) * 1.1]);
+    
+    % Set x-axis limits based on traffic data range (not weather data)
+    if ~isempty(weatherData)
+        xlim([weatherData.dates(1) weatherData.dates(end)]);
+    end
+
+end
+
+function plotMultiModalDaily(locationData, weatherData, analysis, plots, style, multiModal)
+    figure('Position', [408 126 1132 921]);
+    
+    plotHandles = [];
+    
+    % Plot weather on right axis if enabled
+    if multiModal.plotWeather && plots.showWeather
+        yyaxis right
+        weatherHandles = plotWeatherData(weatherData, plots, style);
+    end
+    
+    % Plot traffic data on left axis
+    yyaxis left
+    hold on
+    
+    % Get the specified location data
+    locationFieldName = matlab.lang.makeValidName(multiModal.location);
+    if ~isfield(locationData, locationFieldName)
+        error('Location "%s" not found in data', multiModal.location);
+    end
+    
+    data = locationData.(locationFieldName);
+    
+    % Plot each mode
+    for i = 1:length(multiModal.modes)
+        currentMode = multiModal.modes{i};
+        currentModeDisplay = multiModal.modeDisplayNames{i};
+        currentColor = multiModal.modeColors{i};
+        
+        % Create temporary analysis structure for this mode
+        tempAnalysis = analysis;
+        tempAnalysis.modeString = currentMode;
+        tempAnalysis.modeDisplayString = currentModeDisplay;
+        
+        % Calculate daily totals for this mode
+        dailyData = calculateDailyTotals(data, tempAnalysis);
+        
+        if ~isempty(dailyData.dates)
+            % Plot raw counts
+            h1 = plot(dailyData.dates, dailyData.rawCounts, '-', ...
+                'LineWidth', style.plotLineWidth * 0.5, ...
+                'Color', currentColor, ...
+                'DisplayName', sprintf('%s ( Min = %s ; Max = %s ; Total = %s )', ...
+                    currentModeDisplay, ...
+                    num2sepstr(min(dailyData.rawCounts), '%.0f'), ...
+                    num2sepstr(max(dailyData.rawCounts), '%.0f'), ...
+                    num2sepstr(sum(dailyData.rawCounts), '%.0f')));
+            plotHandles = [plotHandles, h1];
+        end
+    end
+    
+    % Format plot
+    formatMultiModalPlot('Daily', multiModal, plots, style, weatherData);
+    
+    if multiModal.plotWeather && plots.showWeather
+        plotHandles = [plotHandles, weatherHandles];
+    end
+    
+    % Add legend
+    if ~isempty(plotHandles)
+        legend(plotHandles, 'Location', 'north', 'Color', style.axisBackgroundColor, ...
+            'FontSize', style.legendFontSize);
+    end
+    
+    hold off
+end
+
+function plotMultiModalWeekly(locationData, weatherData, analysis, plots, style, multiModal)
+    figure('Position', [408 126 1132 921]);
+    
+    plotHandles = [];
+    
+    % Plot weather on right axis if enabled
+    if multiModal.plotWeather && plots.showWeather
+        yyaxis right
+        weatherHandles = plotWeeklyWeatherData(weatherData, plots, style);
+    end
+    
+    % Plot traffic data on left axis
+    yyaxis left
+    hold on
+    
+    % Get the specified location data
+    locationFieldName = matlab.lang.makeValidName(multiModal.location);
+    data = locationData.(locationFieldName);
+    
+    % Plot each mode
+    for i = 1:length(multiModal.modes)
+        currentMode = multiModal.modes{i};
+        currentModeDisplay = multiModal.modeDisplayNames{i};
+        currentColor = multiModal.modeColors{i};
+        
+        % Create temporary analysis structure for this mode
+        tempAnalysis = analysis;
+        tempAnalysis.modeString = currentMode;
+        tempAnalysis.modeDisplayString = currentModeDisplay;
+        
+        % Calculate weekly totals for this mode
+        weeklyData = calculateWeeklyTotals(data, tempAnalysis);
+        
+        if ~isempty(weeklyData.weekStarts)
+            % Plot raw counts
+            h1 = plot(weeklyData.weekStarts, weeklyData.rawCounts, '-', ...
+                'LineWidth', style.plotLineWidth * 0.5, ...
+                'Color', currentColor, ...
+                'DisplayName', sprintf('%s ( Min = %s ; Max = %s ; Total = %s )', ...
+                    currentModeDisplay, ...
+                    num2sepstr(min(weeklyData.rawCounts), '%.0f'), ...
+                    num2sepstr(max(weeklyData.rawCounts), '%.0f'), ...
+                    num2sepstr(sum(weeklyData.rawCounts), '%.0f')));
+            plotHandles = [plotHandles, h1];
+        end
+    end
+    
+    % Format plot
+    formatMultiModalPlot('Weekly', multiModal, plots, style, weatherData);
+    
+    if multiModal.plotWeather && plots.showWeather
+        plotHandles = [plotHandles, weatherHandles];
+    end
+    
+    % Add legend
+    if ~isempty(plotHandles)
+        legend(plotHandles, 'Location', 'north', 'Color', style.axisBackgroundColor, ...
+            'FontSize', style.legendFontSize);
+    end
+    
+    hold off
+end
+
+function plotMultiModalMonthly(locationData, weatherData, analysis, plots, style, multiModal)
+    figure('Position', [408 126 1132 921]);
+    
+    plotHandles = [];
+    
+    
+    
+    % Plot traffic data on left axis
+    yyaxis left
+    hold on
+    
+    % Get the specified location data
+    locationFieldName = matlab.lang.makeValidName(multiModal.location);
+    data = locationData.(locationFieldName);
+    
+    % Plot each mode
+    for i = 1:length(multiModal.modes)
+        currentMode = multiModal.modes{i};
+        currentModeDisplay = multiModal.modeDisplayNames{i};
+        currentColor = multiModal.modeColors{i};
+        
+        % Create temporary analysis structure for this mode
+        tempAnalysis = analysis;
+        tempAnalysis.modeString = currentMode;
+        tempAnalysis.modeDisplayString = currentModeDisplay;
+        
+        % Calculate monthly totals for this mode
+        monthlyData = calculateMonthlyTotals(data, tempAnalysis);
+        
+        if ~isempty(monthlyData.monthStarts)
+            % Plot raw counts
+            h1 = plot(monthlyData.monthStarts, monthlyData.rawCounts, '-', ...
+                'LineWidth', style.plotLineWidth * 0.5, ...
+                'MarkerSize', style.plotLineWidth * 1.5, ...
+                'Color', currentColor, ...
+                'MarkerFaceColor', currentColor, ...
+                'DisplayName', sprintf('%s ( Min = %s ; Max = %s ; Total = %s )', ...
+                    currentModeDisplay, ...
+                    num2sepstr(min(monthlyData.rawCounts), '%.0f'), ...
+                    num2sepstr(max(monthlyData.rawCounts), '%.0f'), ...
+                    num2sepstr(sum(monthlyData.rawCounts), '%.0f')));
+            plotHandles = [plotHandles, h1];
+        end
+    end
+    
+    % Plot weather on right axis if enabled
+    if multiModal.plotWeather && plots.showWeather
+        yyaxis right
+        weatherHandles = plotMonthlyWeatherData(weatherData, plots, style, monthlyData.monthStarts);
+    end
+
+    % Format plot
+    formatMultiModalPlot('Monthly', multiModal, plots, style, weatherData);
+    
+    if multiModal.plotWeather && plots.showWeather
+        plotHandles = [plotHandles, weatherHandles];
+    end
+    
+    % Add legend
+    if ~isempty(plotHandles)
+        legend(plotHandles, 'Location', 'north', 'Color', style.axisBackgroundColor, ...
+            'FontSize', style.legendFontSize);
+    end
+    
+    hold off
+end
+
+function formatMultiModalPlot(timeScale, multiModal, plots, style, weatherData)
+    % Left axis formatting
+    yyaxis left
+    ylabel(['Total Counts per ' timeScale], ...
+        'FontSize', style.labelFontSize + 2, 'FontWeight', 'bold');
+    
+    ax = gca;
+    ax.FontSize = style.axisFontSize;
+    ax.YAxis(1).Color = 'k';
+    if multiModal.plotWeather && plots.showWeather
+        ax.YAxis(2).Color = [0 0.4471 0.7412];
+    end
+    
+    % Title and formatting
+    title([timeScale ' Traffic Counts by Mode (' multiModal.location ')'], ...
+        'FontSize', style.titleFontSize);
+    
+    if strcmp(timeScale, 'Daily')
+        xlabel('Date', 'FontSize', style.labelFontSize);
+    elseif strcmp(timeScale, 'Weekly')
+        xlabel('Week Starting Date', 'FontSize', style.labelFontSize);
+    else
+        xlabel('Month', 'FontSize', style.labelFontSize);
+    end
+    
+    set(gca, 'Color', style.axisBackgroundColor);
+    grid on;
+    xtickangle(45);
+    
+    % Format y-axis with separators
+    ytick_positions = yticks;
+    ytick_labels = arrayfun(@(v) num2sepstr(v, '%.0f'), ytick_positions, 'UniformOutput', false);
+    yticklabels(ytick_labels);
+    
+    ylim([0 max(ylim) * 1.1]);
+    
+    if ~isempty(weatherData)
+        xlim([weatherData.dates(1) weatherData.dates(end)]);
+    end
+end
+
