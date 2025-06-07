@@ -982,9 +982,9 @@ function formatCombinedMonthlyPlot(analysis, plots, style, weatherData)
     
     % Title and formatting
     if analysis.includePartialMonths
-        monthsTitle = 'Monthly ' + string(analysis.modeDisplayString) + ' (All Months)';
+        monthsTitle = 'Monthly ' + string(analysis.modeDisplayString) + ' (with partial months)';
     else
-        monthsTitle = 'Monthly ' + string(analysis.modeDisplayString) + ' (Complete Months Only)';
+        monthsTitle = 'Monthly ' + string(analysis.modeDisplayString) + ' on rue de Terrebonne';
     end
     title(monthsTitle, 'FontSize', style.titleFontSize);
     
