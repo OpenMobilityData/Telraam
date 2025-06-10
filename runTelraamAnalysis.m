@@ -27,9 +27,13 @@ modeString = 'Bike Total'; modeDisplayString = 'Bike Counts';
 %modeString = 'Car Total'; modeDisplayString = 'Car Counts';
 %modeString = 'Large vehicle Total'; modeDisplayString = 'Heavy Truck Counts';
 
+
+%    'startTime', datetime(2024,11,15,00,00,01), ... % Winter Start
+%    'endTime', datetime(2025,03,31,23,59,59), ... % Winter End
+
 analysis = struct( ...
     'startTime', datetime(2024,08,01,00,00,01), ...
-    'endTime', datetime(2025,06,01,23,59,59), ...
+    'endTime', datetime(2025,06,15,23,59,59), ...
     'modeString', modeString, ...
     'modeDisplayString', modeDisplayString, ...
     'uptimeThreshold', 0.0, ...
@@ -37,7 +41,14 @@ analysis = struct( ...
     'truncationCutoffTime', timeofday(datetime('today')+hours(15)), ...
     'daylightCorrectionRatioWD', 1.65, ...
     'daylightCorrectionRatioWE', 1.37, ...
-    'includePartialMonths', false ...
+    'includePartialMonths', false, ...
+    'outlierDetection', struct( ...
+        'enabled', true, ...
+        'method', 'iqr', ...  % 'iqr', 'zscore', or 'manual'
+        'threshold', 3.0, ...  % IQR multiplier or Z-score threshold
+        'reportOnly', true, ...  % If true, report but don't remove
+        'manualExclusions', [] ...  % Manual datetime exclusions
+    ) ...
 );
 
 % Plot configuration - easy to turn elements on/off
@@ -146,11 +157,15 @@ plotCombinedWeekly(locationData, weatherData, analysis, plots, style);
 %% Generate Combined Monthly Plot
 plotCombinedMonthly(locationData, weatherData, analysis, plots, style);
 
+%% Generate Hourly Pattern Plots (if enabled)
+plotHourlyPatterns(locationData, analysis, plots, style);
+
 %% Generate Multi-Modal Plots (if enabled)
 if multiModal.enabled
     plotMultiModalDaily(locationData, weatherData, analysis, plots, style, multiModal);
     plotMultiModalWeekly(locationData, weatherData, analysis, plots, style, multiModal);
     plotMultiModalMonthly(locationData, weatherData, analysis, plots, style, multiModal);
+    %plotMultiModalHourlyPatterns(locationData, analysis, plots, style, multiModal);
 end
 
 %% ======================== FUNCTIONS ========================
@@ -1245,3 +1260,349 @@ function formatMultiModalPlot(timeScale, multiModal, plots, style, weatherData)
     end
 end
 
+function plotHourlyPatterns(locationData, analysis, plots, style)
+    % Plot average hourly traffic patterns for weekdays and weekends
+    % Includes both grand averages and monthly segregation
+    
+    locationNames = fieldnames(locationData);
+    
+    for i = 1:length(locationNames)
+        locationName = locationNames{i};
+        data = locationData.(locationName);
+        locationInfo = data.locationInfo;
+        
+        % Calculate hourly patterns
+        hourlyData = calculateHourlyPatterns(data, analysis);
+        monthlyHourlyData = calculateMonthlyHourlyPatterns(data, analysis);
+        
+        % Create grand average plot for each location
+        plotGrandAverageHourly(hourlyData, analysis, style, locationInfo.name);
+        
+        % Create monthly segregated plots for weekdays and weekends
+        plotMonthlyHourlyPatterns(monthlyHourlyData, analysis, style, locationInfo.name, 'Weekdays');
+        plotMonthlyHourlyPatterns(monthlyHourlyData, analysis, style, locationInfo.name, 'Weekends');
+    end
+end
+
+function hourlyData = calculateHourlyPatterns(locationDataStruct, analysis)
+    % Calculate average hourly traffic patterns for weekdays and weekends
+    
+    % Extract the data timetable from the structure
+    data = locationDataStruct.data;
+    
+    % Define weekdays
+    weekdays = {'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'};
+    weekends = {'Saturday', 'Sunday'};
+    
+    % Initialize arrays for weekday and weekend traffic
+    weekdayTraffic = [];
+    weekdayTimes = [];
+    weekendTraffic = [];
+    weekendTimes = [];
+    
+    % Process weekdays
+    for ix = 1:length(weekdays)
+        targetDay = weekdays{ix};
+        
+        % Extract rows that match the target day
+        dayRows = strcmp(string(data.dayOfWeek), targetDay);
+        
+        % Filter the timetable for the selected day
+        filteredTable = data(dayRows, :);
+        
+        if ~isempty(filteredTable)
+            % Extract the time component and traffic counts
+            timeOfDay = timeofday(filteredTable.('Date and Time (Local)'));
+            trafficCounts = filteredTable.(analysis.modeString);
+            
+            % Add to the weekday arrays
+            weekdayTraffic = [weekdayTraffic; trafficCounts];
+            weekdayTimes = [weekdayTimes; timeOfDay];
+        end
+    end
+    
+    % Process weekends
+    for ix = 1:length(weekends)
+        targetDay = weekends{ix};
+        
+        % Extract rows that match the target day
+        dayRows = strcmp(string(data.dayOfWeek), targetDay);
+        
+        % Filter the timetable for the selected day
+        filteredTable = data(dayRows, :);
+        
+        if ~isempty(filteredTable)
+            % Extract the time component and traffic counts
+            timeOfDay = timeofday(filteredTable.('Date and Time (Local)'));
+            trafficCounts = filteredTable.(analysis.modeString);
+            
+            % Add to the weekend arrays
+            weekendTraffic = [weekendTraffic; trafficCounts];
+            weekendTimes = [weekendTimes; timeOfDay];
+        end
+    end
+    
+    % Calculate averages for each unique time of day
+    hourlyData = struct();
+    
+    if ~isempty(weekdayTimes)
+        [uniqueWeekdayTimes, ~, idx] = unique(weekdayTimes);
+        avgWeekdayTraffic = accumarray(idx, weekdayTraffic, [], @mean);
+        hourlyData.weekdayTimes = uniqueWeekdayTimes;
+        hourlyData.weekdayAverage = avgWeekdayTraffic;
+    else
+        hourlyData.weekdayTimes = [];
+        hourlyData.weekdayAverage = [];
+    end
+    
+    if ~isempty(weekendTimes)
+        [uniqueWeekendTimes, ~, idx] = unique(weekendTimes);
+        avgWeekendTraffic = accumarray(idx, weekendTraffic, [], @mean);
+        hourlyData.weekendTimes = uniqueWeekendTimes;
+        hourlyData.weekendAverage = avgWeekendTraffic;
+    else
+        hourlyData.weekendTimes = [];
+        hourlyData.weekendAverage = [];
+    end
+end
+
+% function formatHourlyPlot(analysis, style, locationName)
+%     % Format the hourly pattern plot
+% 
+%     ylabel('Hourly Count', 'FontSize', style.labelFontSize + 2, 'FontWeight', 'bold');
+%     xlabel('Time of Day', 'FontSize', style.labelFontSize);
+% 
+%     title(['Average Hourly ' analysis.modeDisplayString ' Patterns (' locationName ')'], ...
+%         'FontSize', style.titleFontSize);
+% 
+%     set(gca, 'Color', style.axisBackgroundColor);
+%     set(gca, 'FontSize', style.axisFontSize);
+%     grid on;
+% 
+%     % Format y-axis with separators
+%     ytick_positions = yticks;
+%     ytick_labels = arrayfun(@(v) num2sepstr(v, '%.0f'), ytick_positions, 'UniformOutput', false);
+%     yticklabels(ytick_labels);
+% 
+%     ylim([0 max(ylim) * 1.1]);
+% 
+%     % Set reasonable x-axis limits (24 hours)
+%     xlim([hours(0) hours(24)]);
+% 
+%     % Set x-axis ticks every 4 hours
+%     xticks(hours(0:4:24));
+%     xticklabels({'00:00', '04:00', '08:00', '12:00', '16:00', '20:00', '24:00'});
+% end
+
+function plotGrandAverageHourly(hourlyData, analysis, style, locationName)
+    % Plot the grand average hourly patterns (original functionality)
+    
+    figure('Position', [408 126 1132 921]);
+    hold on
+    
+    plotHandles = [];
+    
+    % Plot weekday pattern
+    if ~isempty(hourlyData.weekdayTimes)
+        h1 = plot(hourlyData.weekdayTimes, hourlyData.weekdayAverage, '-', ...
+            'LineWidth', style.plotLineWidth, ...
+            'Color', [0 0 1], ...
+            'DisplayName', sprintf('Weekdays (total = %s per day)', ...
+                num2sepstr(sum(hourlyData.weekdayAverage), '%.0f')));
+        plotHandles = [plotHandles, h1];
+    end
+    
+    % Plot weekend pattern
+    if ~isempty(hourlyData.weekendTimes)
+        h2 = plot(hourlyData.weekendTimes, hourlyData.weekendAverage, '-', ...
+            'LineWidth', style.plotLineWidth, ...
+            'Color', [1 0 0], ...
+            'DisplayName', sprintf('Weekends (total = %s per day)', ...
+                num2sepstr(sum(hourlyData.weekendAverage), '%.0f')));
+        plotHandles = [plotHandles, h2];
+    end
+    
+    % Format plot
+    formatHourlyPlot(analysis, style, locationName, 'Average');
+    
+    % Add legend
+    if ~isempty(plotHandles)
+        legend(plotHandles, 'Location', 'northeast', 'Color', style.axisBackgroundColor, ...
+            'FontSize', style.legendFontSize);
+    end
+    
+    hold off
+end
+
+function monthlyHourlyData = calculateMonthlyHourlyPatterns(locationDataStruct, analysis)
+    % Calculate hourly patterns segregated by month
+    
+    % Extract the data timetable from the structure
+    data = locationDataStruct.data;
+    
+    % Define weekdays and add month information
+    weekdays = {'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'};
+    weekends = {'Saturday', 'Sunday'};
+    
+    % Add month information to the data
+    data.monthStartDateTimes = dateshift(data.('Date and Time (Local)'), 'start', 'month');
+    uniqueMonths = unique(data.monthStartDateTimes);
+    
+    % Initialize storage for monthly patterns
+    monthlyHourlyData = struct();
+    monthlyHourlyData.months = uniqueMonths;
+    monthlyHourlyData.weekdayPatterns = {};
+    monthlyHourlyData.weekendPatterns = {};
+    monthlyHourlyData.weekdayTimes = {};
+    monthlyHourlyData.weekendTimes = {};
+    
+    % Process each month
+    for monthIdx = 1:length(uniqueMonths)
+        currentMonth = uniqueMonths(monthIdx);
+        monthData = data(data.monthStartDateTimes == currentMonth, :);
+        
+        if isempty(monthData)
+            continue;
+        end
+        
+        % Process weekdays for this month
+        weekdayTraffic = [];
+        weekdayTimes = [];
+        
+        for dayIdx = 1:length(weekdays)
+            targetDay = weekdays{dayIdx};
+            dayRows = strcmp(string(monthData.dayOfWeek), targetDay);
+            filteredTable = monthData(dayRows, :);
+            
+            if ~isempty(filteredTable)
+                timeOfDay = timeofday(filteredTable.('Date and Time (Local)'));
+                trafficCounts = filteredTable.(analysis.modeString);
+                weekdayTraffic = [weekdayTraffic; trafficCounts];
+                weekdayTimes = [weekdayTimes; timeOfDay];
+            end
+        end
+        
+        % Calculate weekday averages for this month
+        if ~isempty(weekdayTimes)
+            [uniqueWeekdayTimes, ~, idx] = unique(weekdayTimes);
+            avgWeekdayTraffic = accumarray(idx, weekdayTraffic, [], @mean);
+            monthlyHourlyData.weekdayTimes{monthIdx} = uniqueWeekdayTimes;
+            monthlyHourlyData.weekdayPatterns{monthIdx} = avgWeekdayTraffic;
+        else
+            monthlyHourlyData.weekdayTimes{monthIdx} = [];
+            monthlyHourlyData.weekdayPatterns{monthIdx} = [];
+        end
+        
+        % Process weekends for this month
+        weekendTraffic = [];
+        weekendTimes = [];
+        
+        for dayIdx = 1:length(weekends)
+            targetDay = weekends{dayIdx};
+            dayRows = strcmp(string(monthData.dayOfWeek), targetDay);
+            filteredTable = monthData(dayRows, :);
+            
+            if ~isempty(filteredTable)
+                timeOfDay = timeofday(filteredTable.('Date and Time (Local)'));
+                trafficCounts = filteredTable.(analysis.modeString);
+                weekendTraffic = [weekendTraffic; trafficCounts];
+                weekendTimes = [weekendTimes; timeOfDay];
+            end
+        end
+        
+        % Calculate weekend averages for this month
+        if ~isempty(weekendTimes)
+            [uniqueWeekendTimes, ~, idx] = unique(weekendTimes);
+            avgWeekendTraffic = accumarray(idx, weekendTraffic, [], @mean);
+            monthlyHourlyData.weekendTimes{monthIdx} = uniqueWeekendTimes;
+            monthlyHourlyData.weekendPatterns{monthIdx} = avgWeekendTraffic;
+        else
+            monthlyHourlyData.weekendTimes{monthIdx} = [];
+            monthlyHourlyData.weekendPatterns{monthIdx} = [];
+        end
+    end
+end
+
+function plotMonthlyHourlyPatterns(monthlyHourlyData, analysis, style, locationName, dayType)
+    % Plot hourly patterns segregated by month
+    
+    figure('Position', [408 126 1132 921]);
+    hold on
+    
+    plotHandles = [];
+    colorMap = lines(length(monthlyHourlyData.months));
+    
+    % Determine which patterns to plot
+    if strcmp(dayType, 'Weekdays')
+        patterns = monthlyHourlyData.weekdayPatterns;
+        times = monthlyHourlyData.weekdayTimes;
+    else
+        patterns = monthlyHourlyData.weekendPatterns;
+        times = monthlyHourlyData.weekendTimes;
+    end
+    
+    % Plot each month's pattern
+    for monthIdx = 1:length(monthlyHourlyData.months)
+        if ~isempty(patterns{monthIdx}) && ~isempty(times{monthIdx})
+            monthTotal = sum(patterns{monthIdx});
+            
+            % Use subtle colors for individual months, emphasize most recent
+            if monthIdx == length(monthlyHourlyData.months)
+                % Emphasize most recent month
+                alpha = 1.0;
+                lineWidth = style.plotLineWidth * 0.8;
+            else
+                % Subtle for other months
+                alpha = 0.3;
+                lineWidth = style.plotLineWidth * 0.5;
+            end
+            
+            h = plot(times{monthIdx}, patterns{monthIdx}, '-', ...
+                'LineWidth', lineWidth, ...
+                'Color', [colorMap(monthIdx, :) alpha], ...
+                'DisplayName', sprintf('%s (total = %s)', ...
+                    datestr(monthlyHourlyData.months(monthIdx), 'mmm yyyy'), ...
+                    num2sepstr(monthTotal, '%.0f')));
+            plotHandles = [plotHandles, h];
+        end
+    end
+    
+    % Format plot
+    formatHourlyPlot(analysis, style, locationName, [dayType ' by Month']);
+    
+    % Add legend
+    if ~isempty(plotHandles)
+        legend(plotHandles, 'Location', 'northeast', 'Color', style.axisBackgroundColor, ...
+            'FontSize', style.legendFontSize);
+    end
+    
+    hold off
+end
+
+function formatHourlyPlot(analysis, style, locationName, plotType)
+    % Format the hourly pattern plot
+    
+    ylabel('Hourly Count', 'FontSize', style.labelFontSize + 2, 'FontWeight', 'bold');
+    xlabel('Time of Day', 'FontSize', style.labelFontSize);
+    
+    title([plotType ' Hourly ' analysis.modeDisplayString ' (' locationName ')'], ...
+        'FontSize', style.titleFontSize);
+    
+    set(gca, 'Color', style.axisBackgroundColor);
+    set(gca, 'FontSize', style.axisFontSize);
+    grid on;
+    
+    % Format y-axis with separators
+    ytick_positions = yticks;
+    ytick_labels = arrayfun(@(v) num2sepstr(v, '%.0f'), ytick_positions, 'UniformOutput', false);
+    yticklabels(ytick_labels);
+    
+    ylim([0 max(ylim) * 1.1]);
+    
+    % Set reasonable x-axis limits (24 hours)
+    xlim([hours(0) hours(24)]);
+    
+    % Set x-axis ticks every 4 hours
+    xticks(hours(0:4:24));
+    xticklabels({'00:00', '04:00', '08:00', '12:00', '16:00', '20:00', '24:00'});
+end
