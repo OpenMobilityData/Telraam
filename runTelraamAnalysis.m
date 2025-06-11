@@ -33,7 +33,7 @@ modeString = 'Bike Total'; modeDisplayString = 'Bike Counts';
 
 analysis = struct( ...
     'startTime', datetime(2024,08,01,00,00,01), ...
-    'endTime', datetime(2025,06,15,23,59,59), ...
+    'endTime', datetime(2025,06,08,23,59,59), ...
     'modeString', modeString, ...
     'modeDisplayString', modeDisplayString, ...
     'uptimeThreshold', 0.0, ...
@@ -46,7 +46,7 @@ analysis = struct( ...
         'enabled', true, ...
         'method', 'iqr', ...  % 'iqr', 'zscore', or 'manual'
         'threshold', 3.0, ...  % IQR multiplier or Z-score threshold
-        'reportOnly', true, ...  % If true, report but don't remove
+        'reportOnly', false, ...  % If true, report but don't remove
         'manualExclusions', [] ...  % Manual datetime exclusions
     ) ...
 );
@@ -220,6 +220,12 @@ function processedTable = processTelraamData(inputTable, analysis)
     
     % Apply daylight corrections
     processedTable = applyDaylightCorrections(processedTable, analysis);
+
+    % Apply outlier detection and removal
+    if isfield(analysis, 'outlierDetection') && analysis.outlierDetection.enabled
+        processedTable = detectAndHandleOutliers(processedTable, analysis);
+    end
+
 end
 
 function inputTable = addTemporalColumns(inputTable)
@@ -1560,7 +1566,7 @@ function plotMonthlyHourlyPatterns(monthlyHourlyData, analysis, style, locationN
             h = plot(times{monthIdx}, patterns{monthIdx}, '-', ...
                 'LineWidth', lineWidth, ...
                 'Color', [colorMap(monthIdx, :) alpha], ...
-                'DisplayName', sprintf('%s (total = %s)', ...
+                'DisplayName', sprintf('%s (%s/day)', ...
                     datestr(monthlyHourlyData.months(monthIdx), 'mmm yyyy'), ...
                     num2sepstr(monthTotal, '%.0f')));
             plotHandles = [plotHandles, h];
@@ -1605,4 +1611,406 @@ function formatHourlyPlot(analysis, style, locationName, plotType)
     % Set x-axis ticks every 4 hours
     xticks(hours(0:4:24));
     xticklabels({'00:00', '04:00', '08:00', '12:00', '16:00', '20:00', '24:00'});
+end
+
+function inputTable = detectAndHandleOutliers(inputTable, analysis)
+    % Detect and optionally remove outliers from traffic data using context-aware comparison
+    % with minimum absolute difference thresholds to avoid false positives from low-count periods
+    
+    fprintf('\n=== Context-Aware Outlier Detection for %s ===\n', analysis.modeDisplayString);
+    
+    % Get the traffic data column
+    trafficData = inputTable.(analysis.modeString);
+    originalCount = height(inputTable);
+    
+    % Add temporal context columns if they don't exist
+    if ~ismember('hourOfDay', inputTable.Properties.VariableNames)
+        inputTable.hourOfDay = hour(inputTable.('Date and Time (Local)'));
+    end
+    if ~ismember('monthStartDateTimes', inputTable.Properties.VariableNames)
+        inputTable.monthStartDateTimes = dateshift(inputTable.('Date and Time (Local)'), 'start', 'month');
+    end
+    
+    % Calculate expected values for each hour/day-type/month combination
+    expectedValues = calculateExpectedHourlyCounts(inputTable, analysis);
+    
+    % Initialize outlier flags
+    outlierFlags = false(size(trafficData));
+    
+    % Apply manual exclusions first
+    if ~isempty(analysis.outlierDetection.manualExclusions)
+        for i = 1:length(analysis.outlierDetection.manualExclusions)
+            excludeTime = analysis.outlierDetection.manualExclusions(i);
+            manualFlags = abs(inputTable.('Date and Time (Local)') - excludeTime) < hours(1);
+            outlierFlags = outlierFlags | manualFlags;
+            if any(manualFlags)
+                fprintf('Manual exclusion: %s\n', datestr(excludeTime));
+            end
+        end
+    end
+    
+    % Apply context-aware statistical outlier detection with absolute difference filtering
+    switch lower(analysis.outlierDetection.method)
+        case 'iqr'
+            statisticalOutliers = detectContextualIQROutliers(inputTable, expectedValues, analysis);
+        case 'zscore'
+            statisticalOutliers = detectContextualZScoreOutliers(inputTable, expectedValues, analysis);
+        case 'manual'
+            statisticalOutliers = false(size(trafficData));
+    end
+    
+    % Combine manual and statistical outliers
+    outlierFlags = outlierFlags | statisticalOutliers;
+    
+    % Report outliers with context
+    reportContextualOutliers(inputTable, expectedValues, outlierFlags, analysis);
+    
+    % Remove outliers if not in report-only mode
+    if ~analysis.outlierDetection.reportOnly && any(outlierFlags)
+        inputTable = inputTable(~outlierFlags, :);
+        removedCount = sum(outlierFlags);
+        fprintf('Removed %d outlier row(s). Kept %d of %d rows (%.1f%%).\n', ...
+            removedCount, height(inputTable), originalCount, ...
+            100 * height(inputTable) / originalCount);
+    elseif analysis.outlierDetection.reportOnly && any(outlierFlags)
+        fprintf('Report-only mode: outliers flagged but not removed.\n');
+    end
+    
+    fprintf('\n');
+end
+
+function expectedValues = calculateExpectedHourlyCounts(inputTable, analysis)
+    % Calculate expected hourly counts for each hour/day-type/month combination
+    
+    % Define weekdays
+    weekdays = {'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'};
+    
+    % Get unique combinations of month, day type, and hour
+    uniqueMonths = unique(inputTable.monthStartDateTimes);
+    uniqueHours = unique(inputTable.hourOfDay);
+    
+    % Initialize expected values array
+    expectedValues = nan(height(inputTable), 1);
+    
+    fprintf('Calculating expected hourly patterns...\n');
+    
+    for monthIdx = 1:length(uniqueMonths)
+        currentMonth = uniqueMonths(monthIdx);
+        monthData = inputTable(inputTable.monthStartDateTimes == currentMonth, :);
+        
+        if isempty(monthData)
+            continue;
+        end
+        
+        % Process weekdays and weekends separately
+        for isWeekdayGroup = [true, false]
+            if isWeekdayGroup
+                dayTypeData = monthData(ismember(monthData.dayOfWeek, weekdays), :);
+                dayTypeName = 'weekday';
+            else
+                dayTypeData = monthData(~ismember(monthData.dayOfWeek, weekdays), :);
+                dayTypeName = 'weekend';
+            end
+            
+            if isempty(dayTypeData)
+                continue;
+            end
+            
+            % Calculate robust expected value for each hour in this month/day-type combination
+            for hourIdx = 1:length(uniqueHours)
+                currentHour = uniqueHours(hourIdx);
+                hourData = dayTypeData(dayTypeData.hourOfDay == currentHour, :);
+                
+                if height(hourData) >= 2  % Need at least 2 observations for meaningful average
+                    hourCounts = hourData.(analysis.modeString);
+                    hourCounts = hourCounts(~isnan(hourCounts));  % Remove NaN values
+                    
+                    if length(hourCounts) >= 2
+                        % Use robust statistics to calculate expected value
+                        robustExpected = calculateRobustExpected(hourCounts);
+                        
+                        % Find all matching rows in the original table and set expected value
+                        matchingRows = (inputTable.monthStartDateTimes == currentMonth) & ...
+                                       (inputTable.hourOfDay == currentHour) & ...
+                                       (ismember(inputTable.dayOfWeek, weekdays) == isWeekdayGroup);
+                        
+                        expectedValues(matchingRows) = robustExpected;
+                    end
+                end
+            end
+        end
+    end
+    
+    % Report summary of expected value calculation with diagnostics
+    validExpected = ~isnan(expectedValues);
+    fprintf('Calculated expected values for %d of %d observations (%.1f%%)\n', ...
+        sum(validExpected), length(expectedValues), 100 * sum(validExpected) / length(expectedValues));
+    
+    if sum(validExpected) > 0
+        fprintf('Expected value range: %.1f to %.1f (median: %.1f)\n', ...
+            min(expectedValues(validExpected)), max(expectedValues(validExpected)), ...
+            median(expectedValues(validExpected)));
+    end
+    
+    % Diagnostic: Show details for May weekend 18:00 if it exists in the data
+    mayMask = month(inputTable.('Date and Time (Local)')) == 5 & ...
+              year(inputTable.('Date and Time (Local)')) == 2025;
+    if any(mayMask)
+        diagnosticMayWeekend18(inputTable, analysis, mayMask);
+    end
+end
+
+function outliers = detectContextualIQROutliers(inputTable, expectedValues, analysis)
+    % Detect outliers using absolute differences with minimum thresholds
+    
+    trafficData = inputTable.(analysis.modeString);
+    
+    % Calculate absolute differences where we have expected values
+    validComparisons = ~isnan(expectedValues) & ~isnan(trafficData);
+    
+    if sum(validComparisons) < 4
+        outliers = false(size(trafficData));
+        return;
+    end
+    
+    % Use absolute difference: actual - expected
+    absoluteDiffs = zeros(size(trafficData));
+    absoluteDiffs(validComparisons) = trafficData(validComparisons) - expectedValues(validComparisons);
+    
+    % Define minimum thresholds based on data characteristics
+    overallMedian = median(trafficData(~isnan(trafficData)));
+    minAbsoluteDiff = max(5, overallMedian * 0.1);  % At least 5 or 10% of median, whichever is larger
+    minExpectedValue = max(2, overallMedian * 0.05); % Only consider periods with expected > 2 or 5% of median
+    
+    fprintf('Outlier detection thresholds:\n');
+    fprintf('  Minimum absolute difference: %.1f\n', minAbsoluteDiff);
+    fprintf('  Minimum expected value: %.1f\n', minExpectedValue);
+    
+    % Only consider observations where:
+    % 1. Expected value is above minimum threshold (to avoid low-count periods)
+    % 2. Absolute difference is above minimum threshold (to avoid trivial differences)
+    candidateOutliers = validComparisons & ...
+                       expectedValues >= minExpectedValue & ...
+                       abs(absoluteDiffs) >= minAbsoluteDiff;
+    
+    if sum(candidateOutliers) < 4
+        fprintf('Insufficient candidate outliers for IQR analysis (need >= 4, found %d)\n', sum(candidateOutliers));
+        outliers = false(size(trafficData));
+        return;
+    end
+    
+    % Apply IQR method to absolute differences of candidate outliers
+    candidateDiffs = absoluteDiffs(candidateOutliers);
+    Q1 = prctile(candidateDiffs, 25);
+    Q3 = prctile(candidateDiffs, 75);
+    IQR = Q3 - Q1;
+    
+    if IQR <= 0
+        fprintf('Insufficient variation in candidate outliers for IQR analysis\n');
+        outliers = false(size(trafficData));
+        return;
+    end
+    
+    lowerBound = Q1 - analysis.outlierDetection.threshold * IQR;
+    upperBound = Q3 + analysis.outlierDetection.threshold * IQR;
+    
+    fprintf('IQR analysis on %d candidates: Q1=%.1f, Q3=%.1f, bounds=[%.1f, %.1f]\n', ...
+        sum(candidateOutliers), Q1, Q3, lowerBound, upperBound);
+    
+    % Mark outliers (only among candidate outliers)
+    outliers = false(size(trafficData));
+    outliers(candidateOutliers) = (candidateDiffs < lowerBound) | (candidateDiffs > upperBound);
+end
+
+function outliers = detectContextualZScoreOutliers(inputTable, expectedValues, analysis)
+    % Detect outliers using Z-score on absolute differences with minimum thresholds
+    
+    trafficData = inputTable.(analysis.modeString);
+    
+    % Calculate absolute differences where we have expected values
+    validComparisons = ~isnan(expectedValues) & ~isnan(trafficData);
+    
+    if sum(validComparisons) < 3
+        outliers = false(size(trafficData));
+        return;
+    end
+    
+    % Use absolute difference: actual - expected
+    absoluteDiffs = zeros(size(trafficData));
+    absoluteDiffs(validComparisons) = trafficData(validComparisons) - expectedValues(validComparisons);
+    
+    % Define minimum thresholds
+    overallMedian = median(trafficData(~isnan(trafficData)));
+    minAbsoluteDiff = max(5, overallMedian * 0.1);
+    minExpectedValue = max(2, overallMedian * 0.05);
+    
+    fprintf('Outlier detection thresholds:\n');
+    fprintf('  Minimum absolute difference: %.1f\n', minAbsoluteDiff);
+    fprintf('  Minimum expected value: %.1f\n', minExpectedValue);
+    
+    % Only consider significant deviations from meaningful expected values
+    candidateOutliers = validComparisons & ...
+                       expectedValues >= minExpectedValue & ...
+                       abs(absoluteDiffs) >= minAbsoluteDiff;
+    
+    if sum(candidateOutliers) < 3
+        fprintf('Insufficient candidate outliers for Z-score analysis (need >= 3, found %d)\n', sum(candidateOutliers));
+        outliers = false(size(trafficData));
+        return;
+    end
+    
+    % Apply Z-score method to absolute differences of candidate outliers
+    candidateDiffs = absoluteDiffs(candidateOutliers);
+    meanDiff = mean(candidateDiffs);
+    stdDiff = std(candidateDiffs);
+    
+    if stdDiff == 0
+        fprintf('No variation in candidate outlier differences\n');
+        outliers = false(size(trafficData));
+        return;
+    end
+    
+    fprintf('Z-score analysis on %d candidates: mean=%.1f, std=%.1f\n', ...
+        sum(candidateOutliers), meanDiff, stdDiff);
+    
+    % Mark outliers (only among candidate outliers)
+    outliers = false(size(trafficData));
+    zScores = abs(candidateDiffs - meanDiff) / stdDiff;
+    outliers(candidateOutliers) = zScores > analysis.outlierDetection.threshold;
+end
+
+function reportContextualOutliers(inputTable, expectedValues, outlierFlags, analysis)
+    % Report outliers with contextual information, focusing on meaningful deviations
+    
+    trafficData = inputTable.(analysis.modeString);
+    outlierIndices = find(outlierFlags);
+    
+    if ~isempty(outlierIndices)
+        fprintf('Found %d significant outlier(s):\n', length(outlierIndices));
+        
+        % Calculate absolute differences for reporting
+        absoluteDiffs = nan(size(trafficData));
+        validComparisons = ~isnan(expectedValues);
+        absoluteDiffs(validComparisons) = trafficData(validComparisons) - expectedValues(validComparisons);
+        
+        % Sort outliers by magnitude of absolute difference
+        outlierAbsDiffs = abs(absoluteDiffs(outlierIndices));
+        [~, sortIdx] = sort(outlierAbsDiffs, 'descend', 'MissingPlacement', 'last');
+        sortedIndices = outlierIndices(sortIdx);
+        
+        % Report all outliers (since we've filtered to meaningful ones)
+        for i = 1:length(sortedIndices)
+            idx = sortedIndices(i);
+            actual = trafficData(idx);
+            expected = expectedValues(idx);
+            
+            if ~isnan(expected)
+                absDiff = actual - expected;
+                if expected > 0
+                    relDiff = absDiff / expected;
+                    relDiffStr = sprintf('%.0f%% %s', abs(relDiff)*100, ternary(relDiff > 0, 'above', 'below'));
+                else
+                    relDiffStr = 'N/A (expected=0)';
+                end
+                
+                dayType = inputTable.isWeekday(idx);
+                dayTypeStr = ternary(dayType, 'WD', 'WE');
+                
+                fprintf('  %s (%s, %02d:00): actual=%d, expected=%.1f, diff=%+.1f (%s)\n', ...
+                    datestr(inputTable.('Date and Time (Local)')(idx), 'dd-mmm-yyyy'), ...
+                    dayTypeStr, inputTable.hourOfDay(idx), ...
+                    actual, expected, absDiff, relDiffStr);
+            else
+                fprintf('  %s: actual=%d (no expected value available)\n', ...
+                    datestr(inputTable.('Date and Time (Local)')(idx)), actual);
+            end
+        end
+        
+    else
+        fprintf('No significant outliers detected.\n');
+    end
+end
+
+function result = ternary(condition, trueValue, falseValue)
+    % Simple ternary operator implementation
+    if condition
+        result = trueValue;
+    else
+        result = falseValue;
+    end
+end
+
+function robustExpected = calculateRobustExpected(counts)
+    % Calculate robust expected value using multiple methods and choose the most appropriate
+    
+    n = length(counts);
+    
+    if n < 2
+        robustExpected = mean(counts);
+        return;
+    elseif n < 4
+        % For small samples, use median
+        robustExpected = median(counts);
+        return;
+    end
+    
+    % For larger samples, use multiple robust methods and choose based on data characteristics
+    medianVal = median(counts);
+    trimmedMean = trimmean(counts, 20);  % 20% trimmed mean (removes top/bottom 10%)
+    
+    % Use Median Absolute Deviation (MAD) to assess variability
+    mad = median(abs(counts - medianVal));
+    
+    % Calculate coefficient of variation using robust statistics
+    if medianVal > 0
+        robustCV = mad / medianVal;
+    else
+        robustCV = inf;
+    end
+    
+    % Choose method based on data characteristics
+    if robustCV < 0.5
+        % Low variability: trimmed mean is appropriate
+        robustExpected = trimmedMean;
+    else
+        % High variability or potential outliers: use median
+        robustExpected = medianVal;
+    end
+    
+    % Additional check: if trimmed mean differs dramatically from median,
+    % there are likely outliers, so prefer median
+    if abs(trimmedMean - medianVal) > 2 * mad && mad > 0
+        robustExpected = medianVal;
+    end
+end
+
+function diagnosticMayWeekend18(inputTable, analysis, mayMask)
+    % Diagnostic function to show what's happening with May weekend 18:00 values
+    
+    weekends = {'Saturday', 'Sunday'};
+    may18WeekendMask = mayMask & ...
+                       inputTable.hourOfDay == 18 & ...
+                       ismember(inputTable.dayOfWeek, weekends);
+    
+    if any(may18WeekendMask)
+        fprintf('\nDiagnostic - May 2025 Weekend 18:00 values:\n');
+        may18Data = inputTable(may18WeekendMask, :);
+        
+        dates = may18Data.('Date and Time (Local)');
+        counts = may18Data.(analysis.modeString);
+        
+        for i = 1:length(dates)
+            fprintf('  %s: %d bikes\n', datestr(dates(i), 'dd-mmm-yyyy'), counts(i));
+        end
+        
+        validCounts = counts(~isnan(counts));
+        if ~isempty(validCounts)
+            fprintf('  Raw statistics: mean=%.1f, median=%.1f, range=[%d, %d]\n', ...
+                mean(validCounts), median(validCounts), min(validCounts), max(validCounts));
+            
+            robustExp = calculateRobustExpected(validCounts);
+            fprintf('  Robust expected value: %.1f\n', robustExp);
+        end
+        fprintf('\n');
+    end
 end
