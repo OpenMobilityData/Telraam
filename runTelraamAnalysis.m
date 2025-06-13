@@ -163,6 +163,10 @@ plotCombinedMonthly(locationData, weatherData, analysis, plots, style);
 %% Generate Hourly Pattern Plots (if enabled)
 plotHourlyPatterns(locationData, analysis, plots, style);
 
+%% Generate Temperature Scatter Plot
+plotTemperatureScatter(locationData, weatherData, analysis, plots, style);
+%plotTemperatureScatterSeasonal(locationData, weatherData, analysis, plots, style);
+
 %% Generate Multi-Modal Plots (if enabled)
 if multiModal.enabled
     plotMultiModalDaily(locationData, weatherData, analysis, plots, style, multiModal);
@@ -2222,4 +2226,382 @@ function formatDayOfWeekPlot(analysis, style, locationName, plotType, dayNames)
     xticks(1:7);
     xticklabels(dayNames);
     xtickangle(45);
+end
+
+function plotTemperatureScatter(locationData, weatherData, analysis, plots, style)
+    % Plot scatter plot of daily counts versus air temperature for all locations
+    
+    figure('Position', [408 126 1132 921]);
+    hold on
+    
+    locationNames = fieldnames(locationData);
+    plotHandles = [];
+    
+    % Plot each location with different colors
+    for i = 1:length(locationNames)
+        locationName = locationNames{i};
+        data = locationData.(locationName);
+        locationInfo = data.locationInfo;
+        
+        % Calculate daily totals and match with weather data
+        [dailyCounts, dailyTemperatures, validDates] = prepareDailyTemperatureData(data, weatherData, analysis);
+        
+        if ~isempty(dailyCounts)
+            % Create scatter plot
+            h = scatter(dailyTemperatures, dailyCounts, 50, ...
+                'MarkerEdgeColor', locationInfo.plotColor, ...
+                'MarkerFaceColor', locationInfo.plotColor, ...
+                'MarkerFaceAlpha', 0.6, ...
+                'MarkerEdgeAlpha', 0.8, ...
+                'DisplayName', sprintf('%s (%d days)', locationInfo.name, length(dailyCounts)));
+            plotHandles = [plotHandles, h];
+            
+            % Add piecewise linear trend line with breakpoint at 0°C
+            if length(dailyTemperatures) > 5
+                [trendParams, trendStats] = fitPiecewiseLinear(dailyTemperatures, dailyCounts);
+                
+                if ~isempty(trendParams)
+                    % Plot the piecewise linear trend
+                    tempRange = linspace(min(dailyTemperatures), max(dailyTemperatures), 100);
+                    trendLine = evaluatePiecewiseLinear(tempRange, trendParams);
+                    
+                    plot(tempRange, trendLine, '--', ...
+                        'Color', locationInfo.plotColor, ...
+                        'LineWidth', 2, ...
+                        'HandleVisibility', 'off');  % Don't show in legend
+                    
+                    % Store trend stats for later display
+                    locationInfo.trendStats = trendStats;
+                end
+            end
+        end
+    end
+    
+    % Format plot
+    formatTemperatureScatterPlot(analysis, style);
+    
+    % Add correlation statistics
+    addCorrelationStats(locationData, weatherData, analysis, style);
+    
+    % Add legend
+    if ~isempty(plotHandles)
+        legend(plotHandles, 'Location', 'northeast', 'Color', style.axisBackgroundColor, ...
+            'FontSize', style.legendFontSize);
+    end
+    
+    hold off
+end
+
+function [dailyCounts, dailyTemperatures, validDates] = prepareDailyTemperatureData(locationDataStruct, weatherData, analysis)
+    % Prepare matched daily counts and temperature data
+    
+    % Extract the data timetable from the structure
+    data = locationDataStruct.data;
+    
+    % Calculate daily totals
+    data.DayOnly = dateshift(data.('Date and Time (Local)'), 'start', 'day');
+    groupedData = groupsummary(data, 'DayOnly', 'sum', analysis.modeString);
+    
+    % Get the sum column name
+    sumColumnName = ['sum_' analysis.modeString];
+    dailyData = table(groupedData.DayOnly, groupedData.(sumColumnName), ...
+        'VariableNames', {'Date', 'Count'});
+    
+    % Match with weather data
+    [~, ia, ib] = intersect(dailyData.Date, weatherData.dates);
+    
+    if isempty(ia)
+        % No matching dates
+        dailyCounts = [];
+        dailyTemperatures = [];
+        validDates = [];
+        return;
+    end
+    
+    % Extract matched data
+    dailyCounts = dailyData.Count(ia);
+    dailyTemperatures = weatherData.temperature(ib);
+    validDates = dailyData.Date(ia);
+    
+    % Remove any NaN values
+    validIdx = ~isnan(dailyCounts) & ~isnan(dailyTemperatures);
+    dailyCounts = dailyCounts(validIdx);
+    dailyTemperatures = dailyTemperatures(validIdx);
+    validDates = validDates(validIdx);
+end
+
+function formatTemperatureScatterPlot(analysis, style)
+    % Format the temperature scatter plot
+    
+    xlabel('Air Temperature (°C)', 'FontSize', style.labelFontSize, 'FontWeight', 'bold');
+    ylabel(['Daily ' analysis.modeDisplayString], 'FontSize', style.labelFontSize, 'FontWeight', 'bold');
+    
+    title(['Daily ' analysis.modeDisplayString ' vs Air Temperature'], ...
+        'FontSize', style.titleFontSize);
+    
+    set(gca, 'Color', style.axisBackgroundColor);
+    set(gca, 'FontSize', style.axisFontSize);
+    grid on;
+    
+    % Format y-axis with separators
+    ytick_positions = yticks;
+    ytick_labels = arrayfun(@(v) num2sepstr(v, '%.0f'), ytick_positions, 'UniformOutput', false);
+    yticklabels(ytick_labels);
+    
+    % Ensure y-axis starts at 0
+    ylim([0 max(ylim) * 1.05]);
+    
+    % Add temperature reference lines (optional)
+    xLimits = xlim;
+    
+    % Add vertical lines for key temperatures
+    line([0 0], ylim, 'Color', [0.7 0.7 1], 'LineStyle', ':', 'LineWidth', 1, 'HandleVisibility', 'off');
+    line([10 10], ylim, 'Color', [0.7 0.7 0.7], 'LineStyle', ':', 'LineWidth', 1, 'HandleVisibility', 'off');
+    line([20 20], ylim, 'Color', [0.7 0.7 0.7], 'LineStyle', ':', 'LineWidth', 1, 'HandleVisibility', 'off');
+    
+    % Add temperature labels
+    text(0, max(ylim) * 0.95, '0°C', 'HorizontalAlignment', 'center', 'FontSize', style.axisFontSize * 0.8, 'Color', [0.6 0.6 0.6]);
+    text(10, max(ylim) * 0.95, '10°C', 'HorizontalAlignment', 'center', 'FontSize', style.axisFontSize * 0.8, 'Color', [0.6 0.6 0.6]);
+    text(20, max(ylim) * 0.95, '20°C', 'HorizontalAlignment', 'center', 'FontSize', style.axisFontSize * 0.8, 'Color', [0.6 0.6 0.6]);
+end
+
+function addCorrelationStats(locationData, weatherData, analysis, style)
+    % Add piecewise linear model statistics as text annotation
+    
+    locationNames = fieldnames(locationData);
+    statsText = {};
+    
+    for i = 1:length(locationNames)
+        locationName = locationNames{i};
+        data = locationData.(locationName);
+        locationInfo = data.locationInfo;
+        
+        % Get daily data for analysis
+        [dailyCounts, dailyTemperatures, ~] = prepareDailyTemperatureData(data, weatherData, analysis);
+        
+        if length(dailyCounts) > 5
+            % Fit piecewise linear model
+            [trendParams, trendStats] = fitPiecewiseLinear(dailyTemperatures, dailyCounts);
+            
+            if ~isempty(trendParams)
+                % Format statistics for display
+                belowFreezing = sprintf('T<0°C: slope=%.2f', trendStats.slopeBelow);
+                aboveFreezing = sprintf('T≥0°C: slope=%.2f', trendStats.slopeAbove);
+                rSquared = sprintf('R²=%.3f', trendStats.rSquared);
+                
+                statsText{end+1} = sprintf('%s: %s, %s, %s', ...
+                    locationInfo.name, belowFreezing, aboveFreezing, rSquared);
+            else
+                % Fallback to simple correlation if piecewise fit fails
+                corrCoeff = corr(dailyTemperatures, dailyCounts, 'type', 'Pearson');
+                statsText{end+1} = sprintf('%s: r = %.3f (simple)', locationInfo.name, corrCoeff);
+            end
+        end
+    end
+    
+    % Display statistics
+    if ~isempty(statsText)
+        % Position text box in upper left
+        xLimits = xlim;
+        yLimits = ylim;
+        
+        textX = xLimits(1) + 0.05 * (xLimits(2) - xLimits(1));
+        textY = yLimits(2) - 0.1 * (yLimits(2) - yLimits(1));
+        
+        % Create text box
+        textStr = strjoin(statsText, '\n');
+        text(textX, textY, textStr, ...
+            'FontSize', style.axisFontSize * 0.9, ...
+            'VerticalAlignment', 'top', ...
+            'BackgroundColor', [1 1 1 0.9], ...
+            'EdgeColor', [0.7 0.7 0.7], ...
+            'Margin', 5);
+    end
+end
+
+function plotTemperatureScatterSeasonal(locationData, weatherData, analysis, plots, style)
+    % Alternative version: Plot with seasonal color coding
+    % Call this instead of plotTemperatureScatter if you want seasonal analysis
+    
+    figure('Position', [408 126 1132 921]);
+    hold on
+    
+    locationNames = fieldnames(locationData);
+    plotHandles = [];
+    
+    % Define seasons
+    seasonColors = [
+        0.2, 0.7, 0.2;    % Spring (green)
+        1.0, 0.6, 0.0;    % Summer (orange)
+        0.8, 0.4, 0.0;    % Fall (brown)
+        0.2, 0.4, 0.8     % Winter (blue)
+    ];
+    seasonNames = {'Spring', 'Summer', 'Fall', 'Winter'};
+    
+    % Plot each location
+    for i = 1:length(locationNames)
+        locationName = locationNames{i};
+        data = locationData.(locationName);
+        locationInfo = data.locationInfo;
+        
+        % Get daily data
+        [dailyCounts, dailyTemperatures, validDates] = prepareDailyTemperatureData(data, weatherData, analysis);
+        
+        if ~isempty(dailyCounts)
+            % Assign seasons
+            seasons = getSeason(validDates);
+            
+            % Plot each season separately
+            for seasonIdx = 1:4
+                seasonMask = seasons == seasonIdx;
+                if any(seasonMask)
+                    % Adjust marker style for location
+                    if i == 1
+                        markerStyle = 'o';  % Circle for first location
+                    else
+                        markerStyle = 's';  % Square for second location
+                    end
+                    
+                    h = scatter(dailyTemperatures(seasonMask), dailyCounts(seasonMask), 50, ...
+                        'Marker', markerStyle, ...
+                        'MarkerEdgeColor', seasonColors(seasonIdx, :), ...
+                        'MarkerFaceColor', seasonColors(seasonIdx, :), ...
+                        'MarkerFaceAlpha', 0.6, ...
+                        'MarkerEdgeAlpha', 0.8, ...
+                        'DisplayName', sprintf('%s %s', locationInfo.name, seasonNames{seasonIdx}));
+                    
+                    if seasonIdx == 1  % Only add to legend for first season
+                        plotHandles = [plotHandles, h];
+                    end
+                end
+            end
+        end
+    end
+    
+    % Format plot
+    formatTemperatureScatterPlot(analysis, style);
+    title(['Daily ' analysis.modeDisplayString ' vs Air Temperature (by Season)'], ...
+        'FontSize', style.titleFontSize);
+    
+    % Add legend
+    if ~isempty(plotHandles)
+        legend(plotHandles, 'Location', 'northeast', 'Color', style.axisBackgroundColor, ...
+            'FontSize', style.legendFontSize);
+    end
+    
+    hold off
+end
+
+function seasons = getSeason(dates)
+    % Assign seasons based on month
+    % 1 = Spring (Mar-May), 2 = Summer (Jun-Aug), 3 = Fall (Sep-Nov), 4 = Winter (Dec-Feb)
+    
+    months = month(dates);
+    seasons = zeros(size(months));
+    
+    seasons(ismember(months, [3, 4, 5])) = 1;  % Spring
+    seasons(ismember(months, [6, 7, 8])) = 2;  % Summer
+    seasons(ismember(months, [9, 10, 11])) = 3; % Fall
+    seasons(ismember(months, [12, 1, 2])) = 4;  % Winter
+end
+
+function [params, stats] = fitPiecewiseLinear(temperatures, counts)
+    % Fit piecewise linear model with breakpoint at 0°C
+    % Model: y = a1*x + b1 for x < 0, y = a2*x + b2 for x >= 0
+    % with continuity constraint at x = 0: b1 = b2
+    
+    try
+        % Separate data into below and above freezing
+        belowFreezing = temperatures < 0;
+        aboveFreezing = temperatures >= 0;
+        
+        % Need at least 2 points in each segment for fitting
+        if sum(belowFreezing) < 2 || sum(aboveFreezing) < 2
+            params = [];
+            stats = [];
+            return;
+        end
+        
+        % Fit two separate linear models
+        tempBelow = temperatures(belowFreezing);
+        countsBelow = counts(belowFreezing);
+        tempAbove = temperatures(aboveFreezing);
+        countsAbove = counts(aboveFreezing);
+        
+        % Linear fit for below freezing: y = a1*x + b1
+        pBelow = polyfit(tempBelow, countsBelow, 1);
+        a1 = pBelow(1);  % slope
+        b1 = pBelow(2);  % intercept
+        
+        % Linear fit for above freezing: y = a2*x + b2
+        pAbove = polyfit(tempAbove, countsAbove, 1);
+        a2 = pAbove(1);  % slope
+        b2 = pAbove(2);  % intercept
+        
+        % Store parameters
+        params = struct();
+        params.slopeBelow = a1;
+        params.interceptBelow = b1;
+        params.slopeAbove = a2;
+        params.interceptAbove = b2;
+        params.breakpoint = 0;
+        
+        % Calculate goodness of fit
+        predictedCounts = evaluatePiecewiseLinear(temperatures, params);
+        
+        % Calculate R-squared
+        SSres = sum((counts - predictedCounts).^2);
+        SStot = sum((counts - mean(counts)).^2);
+        rSquared = 1 - SSres/SStot;
+        
+        % Calculate individual segment statistics
+        predictedBelow = a1 * tempBelow + b1;
+        predictedAbove = a2 * tempAbove + b2;
+        
+        SSresBelow = sum((countsBelow - predictedBelow).^2);
+        SStotBelow = sum((countsBelow - mean(countsBelow)).^2);
+        rSquaredBelow = 1 - SSresBelow/SStotBelow;
+        
+        SSresAbove = sum((countsAbove - predictedAbove).^2);
+        SStotAbove = sum((countsAbove - mean(countsAbove)).^2);
+        rSquaredAbove = 1 - SSresAbove/SStotAbove;
+        
+        % Store statistics
+        stats = struct();
+        stats.slopeBelow = a1;
+        stats.slopeAbove = a2;
+        stats.interceptBelow = b1;
+        stats.interceptAbove = b2;
+        stats.rSquared = rSquared;
+        stats.rSquaredBelow = rSquaredBelow;
+        stats.rSquaredAbove = rSquaredAbove;
+        stats.nPointsBelow = sum(belowFreezing);
+        stats.nPointsAbove = sum(aboveFreezing);
+        
+        % Check if the breakpoint makes sense (significant difference in slopes)
+        if abs(a1 - a2) < 0.1  % Slopes are very similar
+            % Maybe a simple linear model would be better
+            fprintf('Warning: Piecewise slopes are very similar (%.2f vs %.2f)\n', a1, a2);
+        end
+        
+    catch ME
+        fprintf('Error fitting piecewise linear model: %s\n', ME.message);
+        params = [];
+        stats = [];
+    end
+end
+
+function predictedValues = evaluatePiecewiseLinear(temperatures, params)
+    % Evaluate piecewise linear model at given temperatures
+    
+    predictedValues = zeros(size(temperatures));
+    
+    belowFreezing = temperatures < params.breakpoint;
+    aboveFreezing = temperatures >= params.breakpoint;
+    
+    % Below freezing: y = a1*x + b1
+    predictedValues(belowFreezing) = params.slopeBelow * temperatures(belowFreezing) + params.interceptBelow;
+    
+    % Above freezing: y = a2*x + b2
+    predictedValues(aboveFreezing) = params.slopeAbove * temperatures(aboveFreezing) + params.interceptAbove;
 end
