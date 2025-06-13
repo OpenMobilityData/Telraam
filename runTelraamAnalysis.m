@@ -33,7 +33,7 @@ modeString = 'Bike Total'; modeDisplayString = 'Bike Counts';
 
 analysis = struct( ...
     'startTime', datetime(2024,08,01,00,00,01), ...
-    'endTime', datetime(2025,06,08,23,59,59), ...
+    'endTime', datetime(2025,06,12,23,59,59), ...
     'modeString', modeString, ...
     'modeDisplayString', modeDisplayString, ...
     'uptimeThreshold', 0.0, ...
@@ -76,7 +76,7 @@ style = struct( ...
 % Multi-modal analysis parameters
 multiModal = struct( ...
     'enabled', true, ...
-    'location', easternSegmentName, ...  % Which location to analyze
+    'location', westernSegmentName, ...  % Which location to analyze
     'modes', {{'Bike Total', 'Pedestrian Total', 'Car Total'}}, ...
     'modeDisplayNames', {{'Bike Counts', 'Pedestrian Counts', 'Car Counts'}}, ...
     'modeColors', {{[0 0 1], [0 0.8 0], [1 0 0], [0 0.8 0.8]}}, ...  % Note the double braces
@@ -153,6 +153,9 @@ plotCombinedDaily(locationData, weatherData, analysis, plots, style);
 
 %% Generate Combined Weekly Plot
 plotCombinedWeekly(locationData, weatherData, analysis, plots, style);
+
+%% Generate Day-of-Week Pattern Plots
+plotDayOfWeekPatterns(locationData, analysis, plots, style);
 
 %% Generate Combined Monthly Plot
 plotCombinedMonthly(locationData, weatherData, analysis, plots, style);
@@ -2013,4 +2016,210 @@ function diagnosticMayWeekend18(inputTable, analysis, mayMask)
         end
         fprintf('\n');
     end
+end
+
+function plotDayOfWeekPatterns(locationData, analysis, plots, style)
+    % Plot day-of-week traffic patterns with monthly segregation
+    
+    locationNames = fieldnames(locationData);
+    
+    for i = 1:length(locationNames)
+        locationName = locationNames{i};
+        data = locationData.(locationName);
+        locationInfo = data.locationInfo;
+        
+        % Calculate day-of-week patterns by month
+        dayOfWeekData = calculateDayOfWeekPatterns(data, analysis);
+        
+        % Create monthly segregated plot
+        plotMonthlyDayOfWeekPatterns(dayOfWeekData, analysis, style, locationInfo.name);
+        
+        % Create grand average plot
+        plotGrandAverageDayOfWeek(dayOfWeekData, analysis, style, locationInfo.name);
+    end
+end
+
+function dayOfWeekData = calculateDayOfWeekPatterns(locationDataStruct, analysis)
+    % Calculate day-of-week patterns segregated by month
+    
+    % Extract the data timetable from the structure
+    data = locationDataStruct.data;
+    
+    % Add month information if not present
+    if ~ismember('monthStartDateTimes', data.Properties.VariableNames)
+        data.monthStartDateTimes = dateshift(data.('Date and Time (Local)'), 'start', 'month');
+    end
+    
+    % Define day order for consistent plotting
+    dayOrder = {'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'};
+    
+    % Get unique months
+    uniqueMonths = unique(data.monthStartDateTimes);
+    
+    % Initialize storage for monthly patterns
+    dayOfWeekData = struct();
+    dayOfWeekData.months = uniqueMonths;
+    dayOfWeekData.monthlyPatterns = {};
+    dayOfWeekData.dayNames = dayOrder;
+    
+    % Process each month
+    for monthIdx = 1:length(uniqueMonths)
+        currentMonth = uniqueMonths(monthIdx);
+        monthData = data(data.monthStartDateTimes == currentMonth, :);
+        
+        if isempty(monthData)
+            dayOfWeekData.monthlyPatterns{monthIdx} = nan(1, 7);
+            continue;
+        end
+        
+        % Calculate daily totals for this month
+        monthData.DayOnly = dateshift(monthData.('Date and Time (Local)'), 'start', 'day');
+        dailyTotals = groupsummary(monthData, 'DayOnly', 'sum', analysis.modeString);
+        
+        % Add day of week information to daily totals
+        dailyTotals.dayOfWeek = string(day(dailyTotals.DayOnly, 'name'));
+        
+        % Calculate average for each day of week in this month
+        monthPattern = nan(1, 7);
+        for dayIdx = 1:7
+            targetDay = dayOrder{dayIdx};
+            dayRows = strcmp(dailyTotals.dayOfWeek, targetDay);
+            
+            if any(dayRows)
+                sumColumnName = ['sum_' analysis.modeString];
+                dayTotals = dailyTotals.(sumColumnName)(dayRows);
+                monthPattern(dayIdx) = mean(dayTotals, 'omitnan');
+            end
+        end
+        
+        dayOfWeekData.monthlyPatterns{monthIdx} = monthPattern;
+    end
+    
+    % Calculate grand averages across all months
+    allPatterns = cell2mat(dayOfWeekData.monthlyPatterns');
+    dayOfWeekData.grandAverage = mean(allPatterns, 1, 'omitnan');
+end
+
+function plotMonthlyDayOfWeekPatterns(dayOfWeekData, analysis, style, locationName)
+    % Plot day-of-week patterns segregated by month
+    
+    figure('Position', [408 126 1132 921]);
+    hold on
+    
+    plotHandles = [];
+    colorMap = lines(length(dayOfWeekData.months));
+    
+    % Plot each month's pattern
+    for monthIdx = 1:length(dayOfWeekData.months)
+        monthPattern = dayOfWeekData.monthlyPatterns{monthIdx};
+        
+        if ~all(isnan(monthPattern))
+            monthTotal = sum(monthPattern, 'omitnan') * 7; % Weekly total
+            
+            % Use subtle colors for individual months, emphasize most recent
+            if monthIdx == length(dayOfWeekData.months)
+                % Emphasize most recent month
+                alpha = 1.0;
+                lineWidth = style.plotLineWidth * 0.8;
+                markerSize = 8;
+            else
+                % Subtle for other months
+                alpha = 0.4;
+                lineWidth = style.plotLineWidth * 0.5;
+                markerSize = 6;
+            end
+            
+            % h = plot(1:7, monthPattern, '-o', ...
+            %     'LineWidth', lineWidth, ...
+            %     'MarkerSize', markerSize, ...
+            %     'Color', [colorMap(monthIdx, :) alpha], ...
+            %     'MarkerFaceColor', [colorMap(monthIdx, :)],... % alpha], ...
+            %     'DisplayName', sprintf('%s (weekly total ≈ %s)', ...
+            %         datestr(dayOfWeekData.months(monthIdx), 'mmm yyyy'), ...
+            %         num2sepstr(monthTotal, '%.0f')));
+            h = plot(1:7, monthPattern, '-', ...
+                'LineWidth', lineWidth, ...
+                'MarkerSize', markerSize, ...
+                'Color', [colorMap(monthIdx, :) alpha], ...
+                'DisplayName', sprintf('%s (weekly total ≈ %s)', ...
+                    datestr(dayOfWeekData.months(monthIdx), 'mmm yyyy'), ...
+                    num2sepstr(monthTotal, '%.0f')));
+            plotHandles = [plotHandles, h];
+        end
+    end
+    
+    % Format plot
+    formatDayOfWeekPlot(analysis, style, locationName, 'by Month', dayOfWeekData.dayNames);
+    
+    % Add legend
+    if ~isempty(plotHandles)
+        legend(plotHandles, 'Location', 'northeast', 'Color', style.axisBackgroundColor, ...
+            'FontSize', style.legendFontSize);
+    end
+    
+    hold off
+end
+
+function plotGrandAverageDayOfWeek(dayOfWeekData, analysis, style, locationName)
+    % Plot the grand average day-of-week pattern
+    
+    figure('Position', [408 126 1132 921]);
+    hold on
+    
+    plotHandles = [];
+    
+    % Plot grand average pattern
+    if ~all(isnan(dayOfWeekData.grandAverage))
+        weeklyTotal = sum(dayOfWeekData.grandAverage, 'omitnan') * 7;
+        
+        h = plot(1:7, dayOfWeekData.grandAverage, '-o', ...
+            'LineWidth', style.plotLineWidth, ...
+            'MarkerSize', 10, ...
+            'Color', [0 0 1], ...
+            'MarkerFaceColor', [0 0 1], ...
+            'DisplayName', sprintf('Average (weekly total ≈ %s)', ...
+                num2sepstr(weeklyTotal, '%.0f')));
+        plotHandles = [plotHandles, h];
+        
+        % Add error bars or confidence intervals if desired
+        % (would require storing standard deviations in calculateDayOfWeekPatterns)
+    end
+    
+    % Format plot
+    formatDayOfWeekPlot(analysis, style, locationName, 'Average', dayOfWeekData.dayNames);
+    
+    % Add legend
+    if ~isempty(plotHandles)
+        legend(plotHandles, 'Location', 'northeast', 'Color', style.axisBackgroundColor, ...
+            'FontSize', style.legendFontSize);
+    end
+    
+    hold off
+end
+
+function formatDayOfWeekPlot(analysis, style, locationName, plotType, dayNames)
+    % Format the day-of-week pattern plot
+    
+    ylabel('Average Daily Count', 'FontSize', style.labelFontSize + 2, 'FontWeight', 'bold');
+    xlabel('Day of Week', 'FontSize', style.labelFontSize);
+    
+    title([plotType ' Day-of-Week ' analysis.modeDisplayString ' (' locationName ')'], ...
+        'FontSize', style.titleFontSize);
+    
+    set(gca, 'Color', style.axisBackgroundColor);
+    set(gca, 'FontSize', style.axisFontSize);
+    grid on;
+    
+    % Format y-axis with separators
+    ytick_positions = yticks;
+    ytick_labels = arrayfun(@(v) num2sepstr(v, '%.0f'), ytick_positions, 'UniformOutput', false);
+    yticklabels(ytick_labels);
+    
+    ylim([0 max(ylim) * 1.1]);
+    
+    % Set x-axis to show day names
+    xlim([0.5 7.5]);
+    xticks(1:7);
+    xticklabels(dayNames);
+    xtickangle(45);
 end
