@@ -33,7 +33,7 @@ modeString = 'Bike Total'; modeDisplayString = 'Bike Counts';
 %    'endTime', datetime(2025,03,31,23,59,59), ... % Winter End
 
 analysis = struct( ...
-    'startTime', datetime(2024,08,01,00,00,01), ...
+    'startTime', datetime(2025,06,01,00,00,01), ...
     'endTime', datetime(2025,06,12,23,59,59), ...
     'modeString', modeString, ...
     'modeDisplayString', modeDisplayString, ...
@@ -765,6 +765,31 @@ function formatCombinedWeeklyPlot(analysis, plots, style, weatherData)
 end
 
 function plotCombinedMonthly(locationData, weatherData, analysis, plots, style)
+
+    % Check if any location has monthly data before proceeding
+    locationNames = fieldnames(locationData);
+    hasMonthlyData = false;
+    
+    for i = 1:length(locationNames)
+        locationName = locationNames{i};
+        data = locationData.(locationName);
+        monthlyData = calculateMonthlyTotals(data, analysis);
+        
+        if ~isempty(monthlyData.monthStarts)
+            hasMonthlyData = true;
+            break;
+        end
+    end
+    
+    if ~hasMonthlyData
+        fprintf('Skipping monthly plot: No complete months found in date range (%s to %s).\n', ...
+            datestr(analysis.startTime, 'dd-mmm-yyyy'), datestr(analysis.endTime, 'dd-mmm-yyyy'));
+        if ~analysis.includePartialMonths
+            fprintf('Consider setting analysis.includePartialMonths = true to include partial months.\n');
+        end
+        return;
+    end
+
     figure('Position', [408 126 1132 921]);
     
     locationNames = fieldnames(locationData);
@@ -1189,6 +1214,37 @@ function plotMultiModalWeekly(locationData, weatherData, analysis, plots, style,
 end
 
 function plotMultiModalMonthly(locationData, weatherData, analysis, plots, style, multiModal)
+
+    % Check if the specified location has monthly data
+    locationFieldName = matlab.lang.makeValidName(multiModal.location);
+    if ~isfield(locationData, locationFieldName)
+        fprintf('Skipping multi-modal monthly plot: Location "%s" not found.\n', multiModal.location);
+        return;
+    end
+    
+    data = locationData.(locationFieldName);
+    
+    % Check if any mode has monthly data
+    hasMonthlyData = false;
+    for i = 1:length(multiModal.modes)
+        tempAnalysis = analysis;
+        tempAnalysis.modeString = multiModal.modes{i};
+        monthlyData = calculateMonthlyTotals(data, tempAnalysis);
+        
+        if ~isempty(monthlyData.monthStarts)
+            hasMonthlyData = true;
+            break;
+        end
+    end
+    
+    if ~hasMonthlyData
+        fprintf('Skipping multi-modal monthly plot: No complete months found for location "%s".\n', multiModal.location);
+        if ~analysis.includePartialMonths
+            fprintf('Consider setting analysis.includePartialMonths = true to include partial months.\n');
+        end
+        return;
+    end
+
     figure('Position', [408 126 1132 921]);
     
     plotHandles = [];
