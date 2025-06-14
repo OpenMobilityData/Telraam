@@ -24,8 +24,8 @@ locations = {
 
 % Analysis parameters
 
-modeString = 'Bike Total'; modeDisplayString = 'Bike Counts';
-%modeString = 'Pedestrian Total'; modeDisplayString = 'Pedestrian Counts';
+%modeString = 'Bike Total'; modeDisplayString = 'Bike Counts';
+modeString = 'Pedestrian Total'; modeDisplayString = 'Pedestrian Counts';
 %modeString = 'Car Total'; modeDisplayString = 'Car Counts';
 %modeString = 'Large vehicle Total'; modeDisplayString = 'Heavy Truck Counts';
 
@@ -35,8 +35,8 @@ modeString = 'Bike Total'; modeDisplayString = 'Bike Counts';
 %    'endTime', datetime(2025,03,31,23,59,59), ... % Winter End
 
 analysis = struct( ...
-    'startTime', datetime(2024,08,01,00,00,01), ...
-    'endTime', datetime(2025,06,13,23,59,59), ...
+    'startTime', datetime(2024,11,16,00,00,01), ...
+    'endTime', datetime(2025,03,31,23,59,59), ...
     'modeString', modeString, ...
     'modeDisplayString', modeDisplayString, ...
     'uptimeThreshold', 0.0, ...
@@ -49,7 +49,7 @@ analysis = struct( ...
         'enabled', true, ...
         'method', 'iqr', ...  % 'iqr', 'zscore', or 'manual'
         'threshold', 3.0, ...  % IQR multiplier or Z-score threshold
-        'reportOnly', false, ...  % If true, report but don't remove
+        'reportOnly', true, ...  % If true, report but don't remove
         'manualExclusions', [] ...  % Manual datetime exclusions
     ) ...
 );
@@ -150,6 +150,9 @@ else
     fprintf('Saving weather data to cache: %s\n', cacheFilename);
     save(cacheFilename, 'weatherData');
 end
+
+%% Generate Hourly Raw Count Plots
+plotCombinedHourlyRaw(locationData, weatherData, analysis, plots, style);
 
 %% Generate Combined Daily Plot
 plotCombinedDaily(locationData, weatherData, analysis, plots, style);
@@ -2992,5 +2995,287 @@ function plotModalityBarChart(locationData, analysis, style)
         title(sprintf('Traffic Modality Comparison (%s to %s)', ...
             datestr(analysis.startTime, 'mmm yyyy'), datestr(analysis.endTime, 'mmm yyyy')), ...
             'FontSize', style.titleFontSize, 'FontWeight', 'bold');
+    end
+end
+
+function plotCombinedHourlyRaw(locationData, weatherData, analysis, plots, style)
+    % Plot raw hourly counts as scatter points for all locations
+    
+    figure('Position', [408 126 1400 921]);  % Wider figure for dense time data
+    
+    locationNames = fieldnames(locationData);
+    plotHandles = [];
+    
+    % Plot weather on right axis if enabled
+    % if plots.showWeather
+    %     yyaxis right
+    %     weatherHandles = plotWeatherData(weatherData, plots, style);
+    % end
+    
+    % Plot traffic data on left axis
+    %yyaxis left
+    hold on
+    
+    for i = 1:length(locationNames)
+        locationName = locationNames{i};
+        data = locationData.(locationName);
+        locationInfo = data.locationInfo;
+        
+        % Extract hourly data
+        hourlyData = extractHourlyData(data, analysis);
+        
+        if ~isempty(hourlyData.dateTimes)
+            % Plot raw counts as points
+            if plots.showRawCounts
+                h1 = plot(hourlyData.dateTimes, hourlyData.rawCounts, '.', ...
+                    'MarkerSize', 10, ...
+                    'Color', locationInfo.plotColor, ...
+                    'DisplayName', sprintf('%s Raw (n=%d, range: %s-%s)', ...
+                        locationInfo.name, ...
+                        length(hourlyData.rawCounts), ...
+                        num2sepstr(min(hourlyData.rawCounts), '%.0f'), ...
+                        num2sepstr(max(hourlyData.rawCounts), '%.0f')));
+                plotHandles = [plotHandles, h1];
+            end
+            
+            % Plot adjusted counts if enabled (slightly offset for visibility)
+            if plots.showAdjustedCounts
+                % Add small time offset to avoid overlapping points
+                offsetHours = (i-1) * 0.1;  % 6-minute offset per location
+                offsetTimes = hourlyData.dateTimes + hours(offsetHours);
+                
+                h2 = plot(offsetTimes, hourlyData.adjustedCounts, '.', ...
+                    'MarkerSize', 2, ...
+                    'Color', locationInfo.plotColor * 0.7, ...
+                    'DisplayName', sprintf('%s Adjusted (n=%d, range: %s-%s)', ...
+                        locationInfo.name, ...
+                        length(hourlyData.adjustedCounts), ...
+                        num2sepstr(min(hourlyData.adjustedCounts), '%.0f'), ...
+                        num2sepstr(max(hourlyData.adjustedCounts), '%.0f')));
+                plotHandles = [plotHandles, h2];
+            end
+        end
+    end
+    
+    % Format plot
+    formatCombinedHourlyRawPlot(analysis, plots, style, weatherData);
+    
+    % if plots.showWeather
+    %     plotHandles = [plotHandles, weatherHandles];
+    % end
+
+    % Add legend
+    if ~isempty(plotHandles)
+        legend(plotHandles, 'Location', 'northeast', 'Color', style.axisBackgroundColor, ...
+            'FontSize', style.legendFontSize);
+    end
+    
+    hold off
+end
+
+function hourlyData = extractHourlyData(locationDataStruct, analysis)
+    % Extract hourly raw data for plotting
+    
+    % Extract the data timetable from the structure
+    data = locationDataStruct.data;
+    
+    % Get the relevant columns
+    dateTimes = data.('Date and Time (Local)');
+    rawCounts = data.(analysis.modeString);
+    
+    % Get adjusted counts if available
+    if ismember('AdjustedCountsUptimeDaylight', data.Properties.VariableNames)
+        adjustedCounts = data.AdjustedCountsUptimeDaylight;
+    else
+        adjustedCounts = rawCounts;  % Fallback to raw if adjusted not available
+    end
+    
+    % Remove NaN values
+    validIdx = ~isnan(rawCounts);
+    
+    hourlyData = struct();
+    hourlyData.dateTimes = dateTimes(validIdx);
+    hourlyData.rawCounts = rawCounts(validIdx);
+    hourlyData.adjustedCounts = adjustedCounts(validIdx);
+end
+
+function formatCombinedHourlyRawPlot(analysis, plots, style, weatherData)
+    % Format the hourly raw count plot
+    
+    % Left axis formatting
+    %yyaxis left
+    ylabel(['Hourly ' analysis.modeDisplayString], ...
+        'FontSize', style.labelFontSize + 2, 'FontWeight', 'bold');
+    
+    ax = gca;
+    ax.FontSize = style.axisFontSize;
+    ax.YAxis(1).Color = 'k';
+    % if plots.showWeather
+    %     ax.YAxis(2).Color = [0 0.4471 0.7412];
+    % end
+    
+    % Title and formatting
+    title(['Hourly ' analysis.modeDisplayString ' (Raw Telraam Data)'], ...
+        'FontSize', style.titleFontSize);
+    
+    xlabel('Date and Time', 'FontSize', style.labelFontSize);
+    set(gca, 'Color', style.axisBackgroundColor);
+    grid on;
+    
+    % Format y-axis with separators
+    ytick_positions = yticks;
+    ytick_labels = arrayfun(@(v) num2sepstr(v, '%.0f'), ytick_positions, 'UniformOutput', false);
+    yticklabels(ytick_labels);
+    
+    ylim([0 max(ylim) * 1.1]);
+    
+    % Set appropriate x-axis limits and ticks
+    if ~isempty(weatherData)
+        xlim([weatherData.dates(1) weatherData.dates(end)]);
+    end
+    
+    % Optimize x-axis tick spacing for dense time data
+    xLimits = xlim;
+    dateRange = days(xLimits(2) - xLimits(1));
+    
+    if dateRange <= 7
+        % For week or less: show every day
+        xtickformat('dd-MMM HH:mm');
+        xtickangle(45);
+    elseif dateRange <= 31
+        % For month or less: show every few days
+        ax.XAxis.TickLabelFormat = 'dd-MMM';
+        xtickangle(45);
+    elseif dateRange <= 90
+        % For season or less: show weeks
+        ax.XAxis.TickLabelFormat = 'dd-MMM';
+        xtickangle(45);
+    else
+        % For longer periods: show months
+        ax.XAxis.TickLabelFormat = 'MMM yyyy';
+        xtickangle(45);
+    end
+end
+
+function plotMultiModalHourlyRaw(locationData, weatherData, analysis, plots, style, multiModal)
+    % Plot hourly raw counts for multiple modes at a single location
+    
+    figure('Position', [408 126 1400 921]);
+    
+    plotHandles = [];
+    
+    % Plot weather on right axis if enabled
+    if multiModal.plotWeather && plots.showWeather
+        yyaxis right
+        weatherHandles = plotWeatherData(weatherData, plots, style);
+    end
+    
+    % Plot traffic data on left axis
+    yyaxis left
+    hold on
+    
+    % Get the specified location data
+    locationFieldName = matlab.lang.makeValidName(multiModal.location);
+    if ~isfield(locationData, locationFieldName)
+        error('Location "%s" not found in data', multiModal.location);
+    end
+    
+    data = locationData.(locationFieldName);
+    
+    % Plot each mode
+    for i = 1:length(multiModal.modes)
+        currentMode = multiModal.modes{i};
+        currentModeDisplay = multiModal.modeDisplayNames{i};
+        currentColor = multiModal.modeColors{i};
+        
+        % Create temporary analysis structure for this mode
+        tempAnalysis = analysis;
+        tempAnalysis.modeString = currentMode;
+        tempAnalysis.modeDisplayString = currentModeDisplay;
+        
+        % Extract hourly data for this mode
+        hourlyData = extractHourlyData(data, tempAnalysis);
+        
+        if ~isempty(hourlyData.dateTimes)
+            % Add small time offset to separate overlapping points
+            offsetHours = (i-1) * 0.05;  % 3-minute offset per mode
+            offsetTimes = hourlyData.dateTimes + hours(offsetHours);
+            
+            h1 = plot(offsetTimes, hourlyData.rawCounts, '.', ...
+                'MarkerSize', 4, ...
+                'Color', currentColor, ...
+                'DisplayName', sprintf('%s (n=%d, range: %s-%s)', ...
+                    currentModeDisplay, ...
+                    length(hourlyData.rawCounts), ...
+                    num2sepstr(min(hourlyData.rawCounts), '%.0f'), ...
+                    num2sepstr(max(hourlyData.rawCounts), '%.0f')));
+            plotHandles = [plotHandles, h1];
+        end
+    end
+    
+    % Format plot
+    formatMultiModalHourlyRawPlot(multiModal, plots, style, weatherData);
+    
+    if multiModal.plotWeather && plots.showWeather
+        plotHandles = [plotHandles, weatherHandles];
+    end
+    
+    % Add legend
+    if ~isempty(plotHandles)
+        legend(plotHandles, 'Location', 'northeast', 'Color', style.axisBackgroundColor, ...
+            'FontSize', style.legendFontSize);
+    end
+    
+    hold off
+end
+
+function formatMultiModalHourlyRawPlot(multiModal, plots, style, weatherData)
+    % Format the multi-modal hourly raw plot
+    
+    % Left axis formatting
+    yyaxis left
+    ylabel('Hourly Counts', ...
+        'FontSize', style.labelFontSize + 2, 'FontWeight', 'bold');
+    
+    ax = gca;
+    ax.FontSize = style.axisFontSize;
+    ax.YAxis(1).Color = 'k';
+    if multiModal.plotWeather && plots.showWeather
+        ax.YAxis(2).Color = [0 0.4471 0.7412];
+    end
+    
+    % Title and formatting
+    title(['Hourly Traffic by Mode (' multiModal.location ') - Raw Time Series'], ...
+        'FontSize', style.titleFontSize);
+    
+    xlabel('Date and Time', 'FontSize', style.labelFontSize);
+    set(gca, 'Color', style.axisBackgroundColor);
+    grid on;
+    
+    % Format y-axis with separators
+    ytick_positions = yticks;
+    ytick_labels = arrayfun(@(v) num2sepstr(v, '%.0f'), ytick_positions, 'UniformOutput', false);
+    yticklabels(ytick_labels);
+    
+    ylim([0 max(ylim) * 1.1]);
+    
+    % Set x-axis limits and formatting
+    if ~isempty(weatherData)
+        xlim([weatherData.dates(1) weatherData.dates(end)]);
+    end
+    
+    % Optimize x-axis tick spacing
+    xLimits = xlim;
+    dateRange = days(xLimits(2) - xLimits(1));
+    
+    if dateRange <= 7
+        xtickformat('dd-MMM HH:mm');
+        xtickangle(45);
+    elseif dateRange <= 31
+        ax.XAxis.TickLabelFormat = 'dd-MMM';
+        xtickangle(45);
+    else
+        ax.XAxis.TickLabelFormat = 'MMM yyyy';
+        xtickangle(45);
     end
 end
