@@ -28,6 +28,7 @@ modeString = 'Bike Total'; modeDisplayString = 'Bike Counts';
 %modeString = 'Large vehicle Total'; modeDisplayString = 'Heavy Truck Counts';
 
 
+%    'startTime', datetime(2024,08,01,00,00,01), ... % First install
 %    'startTime', datetime(2024,11,15,00,00,01), ... % Winter Start
 %    'endTime', datetime(2025,03,31,23,59,59), ... % Winter End
 
@@ -166,6 +167,9 @@ plotHourlyPatterns(locationData, analysis, plots, style);
 %% Generate Temperature Scatter Plot
 plotTemperatureScatter(locationData, weatherData, analysis, plots, style);
 %plotTemperatureScatterSeasonal(locationData, weatherData, analysis, plots, style);
+
+%% Generate Modality Pie Charts
+plotModalityPieCharts(locationData, analysis, style);
 
 %% Generate Multi-Modal Plots (if enabled)
 if multiModal.enabled
@@ -849,15 +853,34 @@ function monthlyData = calculateMonthlyTotals(locationDataStruct, analysis)
         monthsToInclude = getCompleteMonthsFromData(data);
     end
     
+    % Check if we have any months to include
+    if isempty(monthsToInclude)
+        % Return empty structure if no valid months
+        monthlyData = struct();
+        monthlyData.monthStarts = datetime.empty(0,1);  % Ensure it's a datetime array
+        monthlyData.rawCounts = double.empty(0,1);      % Ensure it's a numeric array
+        monthlyData.adjustedCounts = double.empty(0,1); % Ensure it's a numeric array
+        
+        fprintf('Warning: No complete months found in date range. ');
+        if ~analysis.includePartialMonths
+            fprintf('Consider setting analysis.includePartialMonths = true.\n');
+        else
+            fprintf('No data available for monthly analysis.\n');
+        end
+        return;
+    end
+    
     % Filter data to only include selected months
     filteredData = data(ismember(data.monthStartDateTimes, monthsToInclude), :);
     
     if isempty(filteredData)
-        % Return empty structure if no valid months
+        % Return empty structure if no data after filtering
         monthlyData = struct();
-        monthlyData.monthStarts = datetime.empty;
-        monthlyData.rawCounts = [];
-        monthlyData.adjustedCounts = [];
+        monthlyData.monthStarts = datetime.empty(0,1);
+        monthlyData.rawCounts = double.empty(0,1);
+        monthlyData.adjustedCounts = double.empty(0,1);
+        
+        fprintf('Warning: No data remaining after month filtering.\n');
         return;
     end
     
@@ -2604,4 +2627,312 @@ function predictedValues = evaluatePiecewiseLinear(temperatures, params)
     
     % Above freezing: y = a2*x + b2
     predictedValues(aboveFreezing) = params.slopeAbove * temperatures(aboveFreezing) + params.interceptAbove;
+end
+
+function plotModalityPieCharts(locationData, analysis, style)
+    % Generate pie charts showing breakdown of counts by modality for each location
+    
+    locationNames = fieldnames(locationData);
+    
+    % Define the modalities to include in the pie charts
+    modalityInfo = getModalityInfo();
+    
+    % Create subplot layout - one pie chart per location
+    numLocations = length(locationNames);
+    if numLocations == 1
+        figure('Position', [408 126 600 600]);
+    elseif numLocations == 2
+        figure('Position', [408 126 1200 600]);
+    else
+        figure('Position', [408 126 1200 800]);
+    end
+    
+    for i = 1:numLocations
+        locationName = locationNames{i};
+        data = locationData.(locationName);
+        locationInfo = data.locationInfo;
+        
+        % Calculate totals for each modality
+        [modalityCounts, modalityLabels, modalityColors] = calculateModalityTotals(data, modalityInfo, analysis);
+        
+        % Create subplot
+        if numLocations <= 2
+            subplot(1, numLocations, i);
+        else
+            subplot(2, ceil(numLocations/2), i);
+        end
+        
+        % Generate pie chart
+        if ~isempty(modalityCounts) && sum(modalityCounts) > 0
+            createModalityPieChart(modalityCounts, modalityLabels, modalityColors, locationInfo.name, analysis, style);
+        else
+            % Handle case with no data
+            text(0.5, 0.5, 'No Data Available', 'HorizontalAlignment', 'center', ...
+                'FontSize', style.labelFontSize, 'FontWeight', 'bold');
+            title(locationInfo.name, 'FontSize', style.titleFontSize);
+            axis off;
+        end
+    end
+    
+    % Add overall figure title
+    sgtitle(sprintf('Traffic Modality Breakdown (%s to %s)', ...
+        datestr(analysis.startTime, 'mmm yyyy'), datestr(analysis.endTime, 'mmm yyyy')), ...
+        'FontSize', style.titleFontSize + 2, 'FontWeight', 'bold');
+end
+
+function modalityInfo = getModalityInfo()
+    % Define modalities and their display properties
+    
+    modalityInfo = struct();
+    
+    % Define each modality with column name, display name, and color
+    modalityInfo.modalities = {
+        struct('columnName', 'Bike Total', 'displayName', 'Bikes', 'color', [0.2, 0.6, 0.2]);
+        struct('columnName', 'Pedestrian Total', 'displayName', 'Pedestrians', 'color', [0.8, 0.4, 0.2]);
+        struct('columnName', 'Car Total', 'displayName', 'Cars', 'color', [0.6, 0.6, 0.6]);
+        struct('columnName', 'Large vehicle Total', 'displayName', 'Trucks', 'color', [0.4, 0.4, 0.4]);
+    };
+end
+
+function [counts, labels, colors] = calculateModalityTotals(locationDataStruct, modalityInfo, analysis)
+    % Calculate total counts for each modality over the analysis period
+    
+    % Extract the data timetable from the structure
+    data = locationDataStruct.data;
+    
+    % Initialize outputs
+    counts = [];
+    labels = {};
+    colors = [];
+    
+    % Process each modality
+    for i = 1:length(modalityInfo.modalities)
+        modality = modalityInfo.modalities{i};
+        
+        % Check if this modality column exists in the data
+        if ismember(modality.columnName, data.Properties.VariableNames)
+            % Calculate total counts for this modality
+            modalityData = data.(modality.columnName);
+            totalCount = sum(modalityData, 'omitnan');
+            
+            % Only include modalities with non-zero counts
+            if totalCount > 0
+                counts = [counts; totalCount];
+                labels{end+1} = modality.displayName;
+                colors = [colors; modality.color];
+            end
+        end
+    end
+end
+
+function createModalityPieChart(counts, labels, colors, locationName, analysis, style)
+    % Create a pie chart with custom formatting
+    
+    % Calculate percentages
+    totalCount = sum(counts);
+    percentages = (counts / totalCount) * 100;
+    
+    % Create labels with both count and percentage
+    pieLabels = cell(size(labels));
+    for i = 1:length(labels)
+        pieLabels{i} = sprintf('%s\n%s (%.1f%%)', ...
+            labels{i}, ...
+            num2sepstr(counts(i), '%.0f'), ...
+            percentages(i));
+    end
+    
+    % Create pie chart
+    p = pie(counts);
+    
+    % Customize pie chart appearance
+    for i = 1:2:length(p)  % Every other element is a patch (the pie slice)
+        patchIndex = (i+1)/2;
+        if patchIndex <= size(colors, 1)
+            set(p(i), 'FaceColor', colors(patchIndex, :));
+            set(p(i), 'EdgeColor', 'white');
+            set(p(i), 'LineWidth', 2);
+        end
+    end
+    
+    % Customize text labels
+    for i = 2:2:length(p)  % Every other element starting from 2 is text
+        set(p(i), 'FontSize', style.axisFontSize * 0.9);
+        set(p(i), 'FontWeight', 'bold');
+        set(p(i), 'Color', [0.2 0.2 0.2]);
+    end
+    
+    % Set custom labels
+    for i = 1:length(pieLabels)
+        if 2*i <= length(p)
+            set(p(2*i), 'String', pieLabels{i});
+        end
+    end
+    
+    % Add title with total count
+    title(sprintf('%s\nTotal: %s', locationName, num2sepstr(totalCount, '%.0f')), ...
+        'FontSize', style.titleFontSize * 0.9, 'FontWeight', 'bold');
+    
+    % Ensure equal aspect ratio for circular pie
+    axis equal;
+end
+
+function plotModalityPieChartsComparative(locationData, analysis, style)
+    % Alternative version: Create a single comparative pie chart showing all locations
+    
+    figure('Position', [408 126 800 600]);
+    
+    locationNames = fieldnames(locationData);
+    modalityInfo = getModalityInfo();
+    
+    % Combine data from all locations
+    combinedCounts = [];
+    combinedLabels = {};
+    combinedColors = [];
+    
+    for i = 1:length(locationNames)
+        locationName = locationNames{i};
+        data = locationData.(locationName);
+        locationInfo = data.locationInfo;
+        
+        % Calculate totals for each modality at this location
+        [modalityCounts, modalityLabels, modalityColors] = calculateModalityTotals(data, modalityInfo, analysis);
+        
+        % Add location prefix to labels
+        for j = 1:length(modalityLabels)
+            combinedLabels{end+1} = sprintf('%s - %s', extractLocationShortName(locationInfo.name), modalityLabels{j});
+            combinedCounts = [combinedCounts; modalityCounts(j)];
+            combinedColors = [combinedColors; modalityColors(j, :)];
+        end
+    end
+    
+    % Create combined pie chart
+    if ~isempty(combinedCounts) && sum(combinedCounts) > 0
+        createModalityPieChart(combinedCounts, combinedLabels, combinedColors, 'All Locations', analysis, style);
+    else
+        text(0.5, 0.5, 'No Data Available', 'HorizontalAlignment', 'center', ...
+            'FontSize', style.labelFontSize, 'FontWeight', 'bold');
+        axis off;
+    end
+    
+    % Add overall title
+    sgtitle(sprintf('Combined Traffic Modality Breakdown (%s to %s)', ...
+        datestr(analysis.startTime, 'mmm yyyy'), datestr(analysis.endTime, 'mmm yyyy')), ...
+        'FontSize', style.titleFontSize + 2, 'FontWeight', 'bold');
+end
+
+function shortName = extractLocationShortName(fullName)
+    % Extract a short name from the full location name for labeling
+    
+    % Look for common patterns to shorten
+    if contains(fullName, '@')
+        parts = split(fullName, '@');
+        if length(parts) >= 2
+            shortName = strtrim(parts{2});
+        else
+            shortName = strtrim(parts{1});
+        end
+    elseif contains(fullName, 'rue de Terrebonne')
+        % Extract the cross street
+        if contains(fullName, 'King Edward')
+            shortName = 'King Edward';
+        elseif contains(fullName, 'Draper')
+            shortName = 'Draper';
+        else
+            shortName = fullName;
+        end
+    else
+        % Use first few words
+        words = split(fullName);
+        if length(words) >= 2
+            shortName = sprintf('%s %s', words{1}, words{2});
+        else
+            shortName = fullName;
+        end
+    end
+    
+    % Limit length
+    if length(shortName) > 15
+        shortName = shortName(1:15);
+    end
+end
+
+function plotModalityBarChart(locationData, analysis, style)
+    % Alternative visualization: Stacked bar chart instead of pie charts
+    
+    figure('Position', [408 126 1000 600]);
+    
+    locationNames = fieldnames(locationData);
+    modalityInfo = getModalityInfo();
+    
+    % Prepare data matrix
+    dataMatrix = [];
+    locationLabels = {};
+    modalityLabels = {};
+    modalityColors = [];
+    
+    % Get modality labels from first location that has data
+    for i = 1:length(locationNames)
+        [~, labels, colors] = calculateModalityTotals(locationData.(locationNames{i}), modalityInfo, analysis);
+        if ~isempty(labels)
+            modalityLabels = labels;
+            modalityColors = colors;
+            break;
+        end
+    end
+    
+    % Build data matrix
+    for i = 1:length(locationNames)
+        locationName = locationNames{i};
+        data = locationData.(locationName);
+        locationInfo = data.locationInfo;
+        
+        [counts, labels, ~] = calculateModalityTotals(data, modalityInfo, analysis);
+        
+        % Align counts with standard modality order
+        alignedCounts = zeros(1, length(modalityLabels));
+        for j = 1:length(labels)
+            idx = find(strcmp(modalityLabels, labels{j}));
+            if ~isempty(idx)
+                alignedCounts(idx) = counts(j);
+            end
+        end
+        
+        dataMatrix = [dataMatrix; alignedCounts];
+        locationLabels{end+1} = extractLocationShortName(locationInfo.name);
+    end
+    
+    % Create stacked bar chart
+    if ~isempty(dataMatrix)
+        b = bar(dataMatrix, 'stacked');
+        
+        % Apply colors
+        for i = 1:length(b)
+            if i <= size(modalityColors, 1)
+                set(b(i), 'FaceColor', modalityColors(i, :));
+                set(b(i), 'EdgeColor', 'white');
+                set(b(i), 'LineWidth', 1);
+            end
+        end
+        
+        % Format axes
+        set(gca, 'XTickLabel', locationLabels);
+        ylabel('Total Count', 'FontSize', style.labelFontSize, 'FontWeight', 'bold');
+        xlabel('Location', 'FontSize', style.labelFontSize, 'FontWeight', 'bold');
+        
+        % Add legend
+        legend(modalityLabels, 'Location', 'northeast', 'FontSize', style.legendFontSize);
+        
+        % Format y-axis with separators
+        ytick_positions = yticks;
+        ytick_labels = arrayfun(@(v) num2sepstr(v, '%.0f'), ytick_positions, 'UniformOutput', false);
+        yticklabels(ytick_labels);
+        
+        set(gca, 'FontSize', style.axisFontSize);
+        grid on;
+        set(gca, 'Color', style.axisBackgroundColor);
+        
+        title(sprintf('Traffic Modality Comparison (%s to %s)', ...
+            datestr(analysis.startTime, 'mmm yyyy'), datestr(analysis.endTime, 'mmm yyyy')), ...
+            'FontSize', style.titleFontSize, 'FontWeight', 'bold');
+    end
 end
