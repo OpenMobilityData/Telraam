@@ -11,11 +11,11 @@ easternSegmentName = 'rue de Terrebonne @ Draper';
 % Locations to analyze
 locations = {
     struct('name', easternSegmentName, ...
-           'fileStem2024', 'telraam-raw-data-2024East60', ...
+           'fileStem2024', 'raw-data-2024East60', ...
            'fileStem2025', 'raw-data-2025East60', ...
            'plotColor', [0 0 1]);  % Blue
     struct('name', westernSegmentName, ...
-           'fileStem2024', 'telraam-raw-data-2024West60', ...
+           'fileStem2024', 'raw-data-2024West60', ...
            'fileStem2025', 'raw-data-2025West60', ...
            'plotColor', [0 0 0]);  % Black
 };
@@ -24,8 +24,8 @@ locations = {
 
 % Analysis parameters
 
-%modeString = 'Bike Total'; modeDisplayString = 'Bike Counts';
-modeString = 'Pedestrian Total'; modeDisplayString = 'Pedestrian Counts';
+modeString = 'Bike Total'; modeDisplayString = 'Bike Counts';
+%modeString = 'Pedestrian Total'; modeDisplayString = 'Pedestrian Counts';
 %modeString = 'Car Total'; modeDisplayString = 'Car Counts';
 %modeString = 'Large vehicle Total'; modeDisplayString = 'Heavy Truck Counts';
 
@@ -35,8 +35,8 @@ modeString = 'Pedestrian Total'; modeDisplayString = 'Pedestrian Counts';
 %    'endTime', datetime(2025,03,31,23,59,59), ... % Winter End
 
 analysis = struct( ...
-    'startTime', datetime(2024,11,16,00,00,01), ...
-    'endTime', datetime(2025,03,31,23,59,59), ...
+    'startTime', datetime(2024,08,01,00,00,01), ...
+    'endTime', datetime(2025,06,15,23,59,59), ...
     'modeString', modeString, ...
     'modeDisplayString', modeDisplayString, ...
     'uptimeThreshold', 0.0, ...
@@ -49,7 +49,7 @@ analysis = struct( ...
         'enabled', true, ...
         'method', 'iqr', ...  % 'iqr', 'zscore', or 'manual'
         'threshold', 3.0, ...  % IQR multiplier or Z-score threshold
-        'reportOnly', true, ...  % If true, report but don't remove
+        'reportOnly', false, ...  % If true, report but don't remove
         'manualExclusions', [] ...  % Manual datetime exclusions
     ) ...
 );
@@ -79,7 +79,7 @@ style = struct( ...
 % Multi-modal analysis parameters
 multiModal = struct( ...
     'enabled', true, ...
-    'location', westernSegmentName, ...  % Which location to analyze
+    'location', easternSegmentName, ...  % Which location to analyze
     'modes', {{'Bike Total', 'Pedestrian Total', 'Car Total'}}, ...
     'modeDisplayNames', {{'Bike Counts', 'Pedestrian Counts', 'Car Counts'}}, ...
     'modeColors', {{[0 0 1], [0 0.8 0], [1 0 0], [0 0.8 0.8]}}, ...  % Note the double braces
@@ -152,7 +152,8 @@ else
 end
 
 %% Generate Hourly Raw Count Plots
-plotCombinedHourlyRaw(locationData, weatherData, analysis, plots, style);
+filteredLocationData = filterNightData(locationData, weatherData);
+plotCombinedHourlyRaw(filteredLocationData, weatherData, analysis, plots, style);
 
 %% Generate Combined Daily Plot
 plotCombinedDaily(locationData, weatherData, analysis, plots, style);
@@ -3027,17 +3028,41 @@ function plotCombinedHourlyRaw(locationData, weatherData, analysis, plots, style
         if ~isempty(hourlyData.dateTimes)
             % Plot raw counts as points
             if plots.showRawCounts
-                h1 = plot(hourlyData.dateTimes, hourlyData.rawCounts, '.', ...
-                    'MarkerSize', 10, ...
-                    'Color', locationInfo.plotColor, ...
-                    'DisplayName', sprintf('%s Raw (n=%d, range: %s-%s)', ...
-                        locationInfo.name, ...
-                        length(hourlyData.rawCounts), ...
-                        num2sepstr(min(hourlyData.rawCounts), '%.0f'), ...
-                        num2sepstr(max(hourlyData.rawCounts), '%.0f')));
+                
+                % Square root scaling makes differences more visible for count data
+                minSize = 10;
+                maxSize = 75;
+                counts = hourlyData.rawCounts;
+
+                % Apply square root transformation
+                sqrtCounts = sqrt(counts);
+                minSqrt = min(sqrtCounts);
+                maxSqrt = max(sqrtCounts);
+
+                if maxSqrt > minSqrt
+                    scaledSizes = minSize + (maxSize - minSize) * (sqrtCounts - minSqrt) / (maxSqrt - minSqrt);
+                else
+                    scaledSizes = repmat(minSize, size(counts));
+                end
+
+                h1 = scatter(hourlyData.dateTimes, hourlyData.rawCounts, scaledSizes, ...
+                    'MarkerFaceColor', locationInfo.plotColor, ...
+                    'MarkerEdgeColor', 'none', ...
+                    'MarkerFaceAlpha', 1.0, ...  % 50% transparency
+                    'DisplayName', sprintf('%s (%s hours counted;  total counts:  %s; average count:  %s per hour;  range: %s-%s per hour)', ...
+                    locationInfo.name, ...
+                    num2sepstr(length(hourlyData.rawCounts),'%.0f'), ...
+                    num2sepstr(sum(hourlyData.rawCounts), '%.0f'), ...
+                    num2sepstr(mean(hourlyData.rawCounts), '%.1f'), ...
+                    num2sepstr(min(hourlyData.rawCounts), '%.0f'), ...
+                    num2sepstr(max(hourlyData.rawCounts), '%.0f')));
+
+                    ytvals = [0 10:10:150];
+                    yticks(ytvals);
+                
                 plotHandles = [plotHandles, h1];
             end
-            
+
             % Plot adjusted counts if enabled (slightly offset for visibility)
             if plots.showAdjustedCounts
                 % Add small time offset to avoid overlapping points
@@ -3127,7 +3152,7 @@ function formatCombinedHourlyRawPlot(analysis, plots, style, weatherData)
     ytick_labels = arrayfun(@(v) num2sepstr(v, '%.0f'), ytick_positions, 'UniformOutput', false);
     yticklabels(ytick_labels);
     
-    ylim([0 max(ylim) * 1.1]);
+    ylim([-1 max(ylim) * 1.1]);
     
     % Set appropriate x-axis limits and ticks
     if ~isempty(weatherData)
@@ -3277,5 +3302,242 @@ function formatMultiModalHourlyRawPlot(multiModal, plots, style, weatherData)
     else
         ax.XAxis.TickLabelFormat = 'MMM yyyy';
         xtickangle(45);
+    end
+end
+
+function filteredLocationData = filterNightData(locationData, weatherData)
+    % Filter out nighttime data points where bike/pedestrian detection is not possible
+    % 
+    % This function removes observations where:
+    % - Both bike and pedestrian counts are zero AND
+    % - Time is before sunrise OR after sunset AND  
+    % - Night Total > 0 (indicating nighttime conditions)
+    %
+    % This provides a more accurate representation of detection capabilities
+    % during periods when the computer vision system can actually detect bikes/pedestrians
+    
+    fprintf('Filtering nighttime data where bike/pedestrian detection is not possible...\n');
+    
+    filteredLocationData = struct();
+    locationNames = fieldnames(locationData);
+    
+    % Process each location
+    for i = 1:length(locationNames)
+        locationName = locationNames{i};
+        data = locationData.(locationName);
+        locationInfo = data.locationInfo;
+        
+        fprintf('Processing location: %s\n', locationInfo.name);
+        
+        % Apply night filtering to this location's data
+        filteredData = applyNightFilter(data.data, weatherData);
+        
+        % Store filtered data back in the structure
+        filteredLocationData.(locationName) = struct();
+        filteredLocationData.(locationName).data = filteredData;
+        filteredLocationData.(locationName).locationInfo = locationInfo;
+        
+        % Report filtering statistics
+        originalCount = height(data.data);
+        filteredCount = height(filteredData);
+        removedCount = originalCount - filteredCount;
+        
+        fprintf('  Original observations: %s\n', num2sepstr(originalCount, '%.0f'));
+        fprintf('  Filtered observations: %s\n', num2sepstr(filteredCount, '%.0f'));
+        fprintf('  Removed (nighttime zeros): %s (%.1f%%)\n', ...
+            num2sepstr(removedCount, '%.0f'), 100 * removedCount / originalCount);
+    end
+    
+    fprintf('Night data filtering complete.\n\n');
+end
+
+function filteredData = applyNightFilter(data, weatherData)
+    % Apply the night filtering criteria to a single location's data
+    
+    % Check required dimensions and columns exist
+    requiredDimensions = {'Date and Time (Local)'};
+    missingDimensions = {};
+    requiredColumns = {'Bike Total', 'Pedestrian Total', 'Night Total'};
+    missingColumns = {};
+    
+    for i = 1:length(requiredColumns)
+        if ~ismember(requiredColumns{i}, data.Properties.VariableNames)
+            missingColumns{end+1} = requiredColumns{i};
+        end
+    end
+
+    for i = 1:length(requiredDimensions)
+        if ~ismember(requiredDimensions{i}, data.Properties.DimensionNames)
+            missingDimensions{end+1} = requiredDimensions{i};
+        end
+    end
+    
+    if ~isempty(missingColumns)
+        warning('Missing required columns for night filtering: %s. Returning original data.', ...
+            strjoin(missingColumns, ', '));
+        filteredData = data;
+        return;
+    end
+
+    if ~isempty(missingDimensions)
+        warning('Missing required dimensions for night filtering: %s. Returning original data.', ...
+            strjoin(missingDimensions, ', '));
+        filteredData = data;
+        return;
+    end
+    
+    % Extract relevant columns
+    dateTimes = data.('Date and Time (Local)');
+    bikeCounts = data.('Bike Total');
+    pedestrianCounts = data.('Pedestrian Total');
+    nightTotal = data.('Night Total');
+    
+    % Match observation times with sunrise/sunset data
+    [sunriseMatched, sunsetMatched] = matchSunriseSunsetTimes(dateTimes, weatherData);
+    
+    % Identify observations to potentially remove
+    % Criteria: bikes = 0 AND pedestrians = 0 AND (before sunrise OR after sunset) AND night total > 0
+    
+    zeroDetectionCounts = (bikeCounts == 0) & (pedestrianCounts == 0);
+    nighttimeConditions = (dateTimes < sunriseMatched) | (dateTimes > sunsetMatched);
+    nightSystemActive = nightTotal > 0;
+    
+    % Combine all criteria - these are the rows to REMOVE
+    rowsToRemove = zeroDetectionCounts & (nighttimeConditions | nightSystemActive);
+    
+    % Apply filter (keep rows that DON'T meet removal criteria)
+    filteredData = data(~rowsToRemove, :);
+    
+    % Report detailed statistics
+    totalObs = length(dateTimes);
+    zeroCountObs = sum(zeroDetectionCounts);
+    nighttimeObs = sum(nighttimeConditions);
+    nightActiveObs = sum(nightSystemActive);
+    removedObs = sum(rowsToRemove);
+    
+    fprintf('    Detailed filtering statistics:\n');
+    fprintf('      Zero bike & pedestrian counts: %s (%.1f%%)\n', ...
+        num2sepstr(zeroCountObs, '%.0f'), 100 * zeroCountObs / totalObs);
+    fprintf('      Nighttime observations: %s (%.1f%%)\n', ...
+        num2sepstr(nighttimeObs, '%.0f'), 100 * nighttimeObs / totalObs);
+    fprintf('      Night system active: %s (%.1f%%)\n', ...
+        num2sepstr(nightActiveObs, '%.0f'), 100 * nightActiveObs / totalObs);
+    fprintf('      Meeting all removal criteria: %s (%.1f%%)\n', ...
+        num2sepstr(removedObs, '%.0f'), 100 * removedObs / totalObs);
+    
+    % Additional diagnostic: show time distribution of removed observations
+    if sum(rowsToRemove) > 0
+        removedTimes = dateTimes(rowsToRemove);
+        hourOfDay = hour(removedTimes);
+        [hourCounts, hourBins] = histcounts(hourOfDay, 0:24);
+        
+        fprintf('      Removed observations by hour: ');
+        peakHours = find(hourCounts > 0);
+        for h = peakHours
+            fprintf('%02d:00(%d) ', hourBins(h), hourCounts(h));
+        end
+        fprintf('\n');
+    end
+end
+
+function [sunriseMatched, sunsetMatched] = matchSunriseSunsetTimes(dateTimes, weatherData)
+    % Match each observation time with the appropriate sunrise/sunset times
+    
+    % Extract just the date part of each observation
+    observationDates = dateshift(dateTimes, 'start', 'day');
+    
+    % Initialize output arrays
+    sunriseMatched = NaT(size(dateTimes));
+    sunsetMatched = NaT(size(dateTimes));
+    
+    % Match each unique date with weather data
+    uniqueDates = unique(observationDates);
+    
+    for i = 1:length(uniqueDates)
+        currentDate = uniqueDates(i);
+        
+        % Find matching weather data for this date
+        weatherIdx = find(weatherData.dates == currentDate);
+        
+        if ~isempty(weatherIdx)
+            % Get sunrise/sunset for this date
+            if iscell(weatherData.sunrise)
+                sunrise = weatherData.sunrise{weatherIdx(1)};
+                sunset = weatherData.sunset{weatherIdx(1)};
+            else
+                sunrise = weatherData.sunrise(weatherIdx(1));
+                sunset = weatherData.sunset(weatherIdx(1));
+            end
+            
+            % Apply to all observations on this date
+            dateMatches = (observationDates == currentDate);
+            sunriseMatched(dateMatches) = sunrise;
+            sunsetMatched(dateMatches) = sunset;
+        else
+            % No weather data for this date - use reasonable defaults
+            % Default sunrise: 6:00 AM, sunset: 6:00 PM
+            defaultSunrise = currentDate + hours(6);
+            defaultSunset = currentDate + hours(18);
+            
+            dateMatches = (observationDates == currentDate);
+            sunriseMatched(dateMatches) = defaultSunrise;
+            sunsetMatched(dateMatches) = defaultSunset;
+        end
+    end
+    
+    % Handle any remaining NaT values with defaults
+    stillMissing = isnat(sunriseMatched) | isnat(sunsetMatched);
+    if any(stillMissing)
+        fprintf('    Warning: Using default sunrise/sunset times for %d observations with missing weather data\n', ...
+            sum(stillMissing));
+        
+        missingDates = dateshift(dateTimes(stillMissing), 'start', 'day');
+        sunriseMatched(stillMissing) = missingDates + hours(6);
+        sunsetMatched(stillMissing) = missingDates + hours(18);
+    end
+end
+
+function demonstrateFilterEffect(originalData, filteredData, analysis)
+    % Optional function to visualize the effect of night filtering
+    % This can be called to show before/after comparison
+    
+    figure('Position', [408 126 1200 800]);
+    
+    % Create subplots for comparison
+    subplot(2, 1, 1);
+    plotHourlyDistribution(originalData, 'Original Data (with nighttime zeros)', analysis);
+    
+    subplot(2, 1, 2);
+    plotHourlyDistribution(filteredData, 'Filtered Data (nighttime zeros removed)', analysis);
+    
+    sgtitle('Effect of Night Data Filtering on Hourly Count Distribution', 'FontSize', 16, 'FontWeight', 'bold');
+end
+
+function plotHourlyDistribution(data, titleStr, analysis)
+    % Plot distribution of counts by hour of day
+    
+    if ismember(analysis.modeString, data.Properties.VariableNames)
+        dateTimes = data.('Date and Time (Local)');
+        counts = data.(analysis.modeString);
+        hours = hour(dateTimes);
+        
+        % Create box plot or histogram by hour
+        boxplot(counts, hours);
+        xlabel('Hour of Day');
+        ylabel(['Count (' analysis.modeString ')']);
+        title(titleStr);
+        grid on;
+        
+        % Add count statistics
+        totalObs = length(counts);
+        zeroObs = sum(counts == 0);
+        text(0.02, 0.98, sprintf('Total obs: %s\nZero counts: %s (%.1f%%)', ...
+            num2sepstr(totalObs, '%.0f'), num2sepstr(zeroObs, '%.0f'), ...
+            100 * zeroObs / totalObs), ...
+            'Units', 'normalized', 'VerticalAlignment', 'top', ...
+            'BackgroundColor', 'white', 'EdgeColor', 'black');
+    else
+        text(0.5, 0.5, 'Data column not found', 'HorizontalAlignment', 'center');
+        title(titleStr);
     end
 end
