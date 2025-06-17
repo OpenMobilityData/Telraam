@@ -49,8 +49,8 @@ analysis = struct( ...
     ) ...
 );
 
-%dateSpan = 'winter';
-dateSpan = 'springSummer';
+dateSpan = 'winter';
+%dateSpan = 'springSummer';
 
 if exist('dateSpan', 'var')
     if strcmp(dateSpan,'winter')
@@ -164,6 +164,13 @@ plotCombinedHourlyRaw(filteredLocationData, weatherData, analysis, plots, style)
 
 %% Generate Hourly Count Histogram
 plotHourlyCountHistogram(filteredLocationData, analysis, style);
+
+%% Analyze Zero Count Intervals
+analyzeZeroCountIntervals(filteredLocationData, analysis);
+
+%% Optional: Visualize Zero Intervals
+% Uncomment to create a visual plot of zero intervals
+%plotZeroIntervalAnalysis(filteredLocationData, analysis, style);
 
 %% Generate Combined Daily Plot
 plotCombinedDaily(locationData, weatherData, analysis, plots, style);
@@ -3832,3 +3839,246 @@ function plotHourlyCountHistogramOverlay(locationData, analysis, style)
     hold off
 end
 
+function analyzeZeroCountIntervals(locationData, analysis)
+    % Find and analyze the longest intervals of consecutive zero daylight counts
+    
+    fprintf('\n=== Zero Count Interval Analysis for %s ===\n', analysis.modeDisplayString);
+    
+    locationNames = fieldnames(locationData);
+    
+    for i = 1:length(locationNames)
+        locationName = locationNames{i};
+        data = locationData.(locationName);
+        locationInfo = data.locationInfo;
+        
+        fprintf('\nLocation: %s\n', locationInfo.name);
+        
+        % Find zero intervals for this location
+        [longestInterval, allIntervals, stats] = findZeroIntervals(data, analysis);
+        
+        % Report results
+        reportZeroIntervals(longestInterval, allIntervals, stats, locationInfo.name, analysis);
+    end
+    
+    fprintf('\n');
+end
+
+function [longestInterval, allIntervals, stats] = findZeroIntervals(locationDataStruct, analysis)
+    % Find all intervals of consecutive zero counts during daylight hours
+    
+    % Extract the data
+    data = locationDataStruct.data;
+    
+    % Filter for daylight hours only (where detection is possible)
+    if ismember('Daylight', data.Properties.VariableNames)
+        daylightData = data(data.Daylight == 1, :);
+    else
+        % Fallback: assume all data is daylight if Daylight column doesn't exist
+        daylightData = data;
+        fprintf('  Warning: No Daylight column found, using all data\n');
+    end
+    
+    if isempty(daylightData)
+        longestInterval = struct();
+        allIntervals = [];
+        stats = struct();
+        return;
+    end
+    
+    % Get times and counts
+    dateTimes = daylightData.('Date and Time (Local)');
+    counts = daylightData.(analysis.modeString);
+    
+    % Remove NaN values
+    validIdx = ~isnan(counts);
+    dateTimes = dateTimes(validIdx);
+    counts = counts(validIdx);
+    
+    if isempty(counts)
+        longestInterval = struct();
+        allIntervals = [];
+        stats = struct();
+        return;
+    end
+    
+    % Find consecutive zero periods
+    isZero = (counts == 0);
+    
+    % Find start and end indices of zero runs
+    zeroStarts = find(diff([0; isZero]) == 1);
+    zeroEnds = find(diff([isZero; 0]) == -1);
+    
+    % Calculate intervals
+    allIntervals = [];
+    
+    for i = 1:length(zeroStarts)
+        startIdx = zeroStarts(i);
+        endIdx = zeroEnds(i);
+        
+        startTime = dateTimes(startIdx);
+        endTime = dateTimes(endIdx);
+        duration = hours(endTime - startTime) + 1; % +1 because both endpoints are included
+        
+        interval = struct();
+        interval.startTime = startTime;
+        interval.endTime = endTime;
+        interval.duration = duration;
+        interval.startIdx = startIdx;
+        interval.endIdx = endIdx;
+        
+        allIntervals = [allIntervals; interval];
+    end
+    
+    % Find longest interval
+    if ~isempty(allIntervals)
+        [~, maxIdx] = max([allIntervals.duration]);
+        longestInterval = allIntervals(maxIdx);
+    else
+        longestInterval = struct();
+    end
+    
+    % Calculate statistics
+    stats = struct();
+    stats.totalObservations = length(counts);
+    stats.zeroObservations = sum(isZero);
+    stats.nonZeroObservations = sum(~isZero);
+    stats.percentZero = 100 * stats.zeroObservations / stats.totalObservations;
+    stats.numZeroIntervals = length(allIntervals);
+    
+    if ~isempty(allIntervals)
+        durations = [allIntervals.duration];
+        stats.meanIntervalDuration = mean(durations);
+        stats.medianIntervalDuration = median(durations);
+        stats.maxIntervalDuration = max(durations);
+        stats.totalZeroHours = sum(durations);
+    else
+        stats.meanIntervalDuration = 0;
+        stats.medianIntervalDuration = 0;
+        stats.maxIntervalDuration = 0;
+        stats.totalZeroHours = 0;
+    end
+end
+
+function reportZeroIntervals(longestInterval, allIntervals, stats, locationName, analysis)
+    % Report the zero interval analysis results
+    
+    fprintf('  Total daylight observations: %s\n', num2sepstr(stats.totalObservations, '%.0f'));
+    fprintf('  Zero count observations: %s (%.1f%%)\n', ...
+        num2sepstr(stats.zeroObservations, '%.0f'), stats.percentZero);
+    fprintf('  Number of zero intervals: %d\n', stats.numZeroIntervals);
+    
+    if stats.numZeroIntervals > 0
+        fprintf('  Total hours with zero counts: %.1f\n', stats.totalZeroHours);
+        fprintf('  Average zero interval duration: %.1f hours\n', stats.meanIntervalDuration);
+        fprintf('  Median zero interval duration: %.1f hours\n', stats.medianIntervalDuration);
+        
+        fprintf('\n  LONGEST ZERO INTERVAL:\n');
+        fprintf('    Start: %s\n', datestr(longestInterval.startTime, 'dd-mmm-yyyy HH:MM'));
+        fprintf('    End:   %s\n', datestr(longestInterval.endTime, 'dd-mmm-yyyy HH:MM'));
+        fprintf('    Duration: %.1f hours (%.1f days)\n', ...
+            longestInterval.duration, longestInterval.duration / 24);
+        
+        % Describe the interval in context
+        if longestInterval.duration >= 24 * 7
+            fprintf('    Context: More than a week of no activity\n');
+        elseif longestInterval.duration >= 24 * 3
+            fprintf('    Context: Multiple days of no activity\n');
+        elseif longestInterval.duration >= 24
+            fprintf('    Context: More than a full day of no activity\n');
+        elseif longestInterval.duration >= 12
+            fprintf('    Context: More than half a day of no activity\n');
+        else
+            fprintf('    Context: Several hours of no activity\n');
+        end
+        
+        % Show top 5 longest intervals if there are multiple
+        topNum = 20;
+        if length(allIntervals) > 1
+            fprintf(['\n  TOP ' num2str(topNum) ' LONGEST ZERO INTERVALS:\n']);
+            durations = [allIntervals.duration];
+            [sortedDurations, sortIdx] = sort(durations, 'descend');
+            
+            numToShow = min(topNum, length(allIntervals));
+            for i = 1:numToShow
+                idx = sortIdx(i);
+                interval = allIntervals(idx);
+                fprintf('    %d. %s to %s (%.1f hours)\n', i, ...
+                    datestr(interval.startTime, 'dd-mmm HH:MM'), ...
+                    datestr(interval.endTime, 'dd-mmm HH:MM'), ...
+                    interval.duration);
+            end
+        end
+    else
+        fprintf('  No zero intervals found - there was at least one count in every hour!\n');
+    end
+end
+
+function plotZeroIntervalAnalysis(locationData, analysis, style)
+    % Optional: Create visualization of zero intervals
+    
+    figure('Position', [408 126 1200 800]);
+    
+    locationNames = fieldnames(locationData);
+    numLocations = length(locationNames);
+    
+    for i = 1:numLocations
+        subplot(numLocations, 1, i);
+        
+        locationName = locationNames{i};
+        data = locationData.(locationName);
+        locationInfo = data.locationInfo;
+        
+        % Get daylight data
+        if ismember('Daylight', data.data.Properties.VariableNames)
+            daylightData = data.data(data.data.Daylight == 1, :);
+        else
+            daylightData = data.data;
+        end
+        
+        if ~isempty(daylightData)
+            dateTimes = daylightData.('Date and Time (Local)');
+            counts = daylightData.(analysis.modeString);
+            
+            % Remove NaN values
+            validIdx = ~isnan(counts);
+            dateTimes = dateTimes(validIdx);
+            counts = counts(validIdx);
+            
+            % Plot as line with zero highlighted
+            plot(dateTimes, counts, '.', 'MarkerSize', 2, 'Color', locationInfo.plotColor);
+            hold on;
+            
+            % Highlight zero periods
+            zeroIdx = (counts == 0);
+            if any(zeroIdx)
+                plot(dateTimes(zeroIdx), counts(zeroIdx), '.', 'MarkerSize', 4, 'Color', 'red');
+            end
+            
+            % Find and highlight longest zero interval
+            [longestInterval, ~, ~] = findZeroIntervals(data, analysis);
+            if ~isempty(fieldnames(longestInterval))
+                % Add rectangle to highlight longest interval
+                yLimits = ylim;
+                rectangle('Position', [datenum(longestInterval.startTime), yLimits(1), ...
+                    datenum(longestInterval.endTime) - datenum(longestInterval.startTime), ...
+                    yLimits(2) - yLimits(1)], ...
+                    'FaceColor', 'yellow', 'FaceAlpha', 0.3, 'EdgeColor', 'none');
+            end
+            
+            title(sprintf('%s - Zero Intervals Highlighted', locationInfo.name), ...
+                'FontSize', style.titleFontSize * 0.9);
+            ylabel(['Hourly ' analysis.modeDisplayString], 'FontSize', style.labelFontSize * 0.9);
+            
+            if i == numLocations
+                xlabel('Date', 'FontSize', style.labelFontSize);
+            end
+            
+            grid on;
+            set(gca, 'FontSize', style.axisFontSize * 0.9);
+            
+            hold off;
+        end
+    end
+    
+    sgtitle('Zero Count Interval Analysis', 'FontSize', style.titleFontSize);
+end
