@@ -29,13 +29,8 @@ modeString = 'Bike Total'; modeDisplayString = 'Bike Counts';
 %modeString = 'Car Total'; modeDisplayString = 'Car Counts';
 %modeString = 'Large vehicle Total'; modeDisplayString = 'Heavy Truck Counts';
 
-
-%    'startTime', datetime(2024,08,01,00,00,01), ... % First install
-%    'startTime', datetime(2024,11,15,00,00,01), ... % Winter Start
-%    'endTime', datetime(2025,03,31,23,59,59), ... % Winter End
-
 analysis = struct( ...
-    'startTime', datetime(2024,08,01,00,00,01), ...
+    'startTime', datetime(2024,08,15,00,00,01), ...
     'endTime', datetime(2025,06,15,23,59,59), ...
     'modeString', modeString, ...
     'modeDisplayString', modeDisplayString, ...
@@ -53,6 +48,18 @@ analysis = struct( ...
         'manualExclusions', [] ...  % Manual datetime exclusions
     ) ...
 );
+
+%dateSpan = 'winter';
+dateSpan = 'springSummer';
+
+if exist('dateSpan', 'var')
+    if strcmp(dateSpan,'winter')
+        analysis.startTime = datetime(2024,11,16,00,00,01);
+        analysis.endTime = datetime(2025,03,31,23,59,59);
+    elseif strcmp(dateSpan,'springSummer')
+        analysis.startTime = datetime(2025,04,01,23,59,59);
+    end
+end
 
 % Plot configuration - easy to turn elements on/off
 plots = struct( ...
@@ -154,6 +161,9 @@ end
 %% Generate Hourly Raw Count Plots
 filteredLocationData = filterNightData(locationData, weatherData);
 plotCombinedHourlyRaw(filteredLocationData, weatherData, analysis, plots, style);
+
+%% Generate Hourly Count Histogram
+plotHourlyCountHistogram(filteredLocationData, analysis, style);
 
 %% Generate Combined Daily Plot
 plotCombinedDaily(locationData, weatherData, analysis, plots, style);
@@ -3143,6 +3153,11 @@ function formatCombinedHourlyRawPlot(analysis, plots, style, weatherData)
     title(['Hourly ' analysis.modeDisplayString ' (Raw Telraam Data)'], ...
         'FontSize', style.titleFontSize);
     
+    subtitle(sprintf('%s to %s', ...
+        datestr(analysis.startTime, 'dd-mmm-yyyy'), ...
+        datestr(analysis.endTime, 'dd-mmm-yyyy')), ...
+        'FontSize', style.axisFontSize, 'Color', 0.3.*[1 1 1]);
+
     xlabel('Date and Time', 'FontSize', style.labelFontSize);
     set(gca, 'Color', style.axisBackgroundColor);
     grid on;
@@ -3541,3 +3556,279 @@ function plotHourlyDistribution(data, titleStr, analysis)
         title(titleStr);
     end
 end
+
+function plotHourlyCountHistogram(locationData, analysis, style)
+    % Plot histogram of hourly counts for all locations on the same axes
+    
+    figure('Position', [408 126 1000 700]);
+    hold on
+    
+    locationNames = fieldnames(locationData);
+    plotHandles = [];
+    
+    % Collect all data first to determine appropriate bin edges
+    allCounts = [];
+    locationCounts = cell(length(locationNames), 1);
+    
+    for i = 1:length(locationNames)
+        locationName = locationNames{i};
+        data = locationData.(locationName);
+        
+        % Extract hourly counts
+        hourlyData = extractHourlyData(data, analysis);
+        locationCounts{i} = hourlyData.rawCounts;
+        allCounts = [allCounts; hourlyData.rawCounts];
+    end
+    
+    % Determine bin edges based on all data
+    if ~isempty(allCounts)
+        maxCount = max(allCounts);
+        
+        % Create sensible bin edges
+        if maxCount <= 20
+            binEdges = 0:1:maxCount+1;  % 1-count bins for small ranges
+        elseif maxCount <= 50
+            binEdges = 0:2:maxCount+2;  % 2-count bins for medium ranges
+        elseif maxCount <= 100
+            binEdges = 0:5:maxCount+5;  % 5-count bins for larger ranges
+        else
+            binEdges = 0:10:maxCount+10; % 10-count bins for very large ranges
+        end
+    else
+        binEdges = 0:1:10;  % Default if no data
+    end
+
+    binEdges = 0:1:maxCount+1; % Hard coded
+    
+    % Plot histogram for each location
+    for i = 1:length(locationNames)
+        locationName = locationNames{i};
+        data = locationData.(locationName);
+        locationInfo = data.locationInfo;
+        counts = locationCounts{i};
+        
+        if ~isempty(counts)
+            % Create histogram
+            h = histogram(counts, binEdges, ...
+                'FaceColor', locationInfo.plotColor, ...
+                'EdgeColor', 'white', ...
+                'FaceAlpha', 0.6, ...
+                'LineWidth', 1, ...
+                'DisplayName', sprintf('%s (%s hours; median = %.0f per hour; max = %s per hour)', ...
+                    locationInfo.name, ...
+                    num2sepstr(length(counts), '%.0f'), ...
+                    median(counts), ...
+                    num2sepstr(max(counts), '%.0f')));
+            
+            plotHandles = [plotHandles, h];
+        end
+    end
+    
+    % Format the plot
+    formatHistogramPlot(analysis, style, binEdges);
+    
+    % Add legend
+    if ~isempty(plotHandles)
+        legend(plotHandles, 'Location', 'northeast', 'Color', style.axisBackgroundColor, ...
+            'FontSize', style.legendFontSize);
+    end
+    
+    hold off
+end
+
+function plotHourlyCountHistogramNormalized(locationData, analysis, style)
+    % Alternative version: Normalized histograms for better comparison when sample sizes differ
+    
+    figure('Position', [408 126 1000 700]);
+    hold on
+    
+    locationNames = fieldnames(locationData);
+    plotHandles = [];
+    
+    % Collect all data to determine bin edges
+    allCounts = [];
+    locationCounts = cell(length(locationNames), 1);
+    
+    for i = 1:length(locationNames)
+        locationName = locationNames{i};
+        data = locationData.(locationName);
+        hourlyData = extractHourlyData(data, analysis);
+        locationCounts{i} = hourlyData.rawCounts;
+        allCounts = [allCounts; hourlyData.rawCounts];
+    end
+    
+    % Determine bin edges
+    if ~isempty(allCounts)
+        maxCount = max(allCounts);
+        if maxCount <= 20
+            binEdges = 0:1:maxCount+1;
+        elseif maxCount <= 50
+            binEdges = 0:2:maxCount+2;
+        elseif maxCount <= 100
+            binEdges = 0:5:maxCount+5;
+        else
+            binEdges = 0:10:maxCount+10;
+        end
+    else
+        binEdges = 0:1:10;
+    end
+    
+    % Plot normalized histogram for each location
+    for i = 1:length(locationNames)
+        locationName = locationNames{i};
+        data = locationData.(locationName);
+        locationInfo = data.locationInfo;
+        counts = locationCounts{i};
+        
+        if ~isempty(counts)
+            % Create normalized histogram (shows probability density)
+            h = histogram(counts, binEdges, ...
+                'Normalization', 'probability', ...
+                'FaceColor', locationInfo.plotColor, ...
+                'EdgeColor', 'white', ...
+                'FaceAlpha', 0.6, ...
+                'LineWidth', 1, ...
+                'DisplayName', sprintf('%s (n=%s, median=%.1f)', ...
+                    locationInfo.name, ...
+                    num2sepstr(length(counts), '%.0f'), ...
+                    median(counts)));
+            
+            plotHandles = [plotHandles, h];
+        end
+    end
+    
+    % Format the normalized plot
+    formatNormalizedHistogramPlot(analysis, style, binEdges);
+    
+    % Add legend
+    if ~isempty(plotHandles)
+        legend(plotHandles, 'Location', 'northeast', 'Color', style.axisBackgroundColor, ...
+            'FontSize', style.legendFontSize);
+    end
+    
+    hold off
+end
+
+function formatHistogramPlot(analysis, style, binEdges)
+    % Format the histogram plot
+    
+    xlabel(['Hourly ' analysis.modeDisplayString], ...
+        'FontSize', style.labelFontSize, 'FontWeight', 'bold');
+    ylabel('Number of Hours', 'FontSize', style.labelFontSize, 'FontWeight', 'bold');
+    
+    title(['Distribution of Hourly ' analysis.modeDisplayString ' (Dawn to Dusk)'], ...
+        'FontSize', style.titleFontSize);
+
+    subtitle(sprintf('%s to %s', ...
+        datestr(analysis.startTime, 'dd-mmm-yyyy'), ...
+        datestr(analysis.endTime, 'dd-mmm-yyyy')), ...
+        'FontSize', style.axisFontSize, 'Color', 0.3.*[1 1 1]);
+    
+    set(gca, 'Color', style.axisBackgroundColor);
+    set(gca, 'FontSize', style.axisFontSize);
+    grid on;
+    
+    % Format y-axis with separators
+    ytick_positions = yticks;
+    ytick_labels = arrayfun(@(v) num2sepstr(v, '%.0f'), ytick_positions, 'UniformOutput', false);
+    yticklabels(ytick_labels);
+    
+    % Set x-axis limits based on bin edges
+    xlim([binEdges(1) binEdges(end)]);
+    xticks([binEdges(1):10:binEdges(end)+1])
+    
+    % Add vertical line at median for reference (position not correct)
+    % medianLine = median(binEdges(1:end-1));  % Approximate median bin
+    % line([medianLine medianLine], ylim, 'Color', [0.5 0.5 0.5], ...
+    %     'LineStyle', '--', 'LineWidth', 1, 'HandleVisibility', 'off');
+end
+
+function formatNormalizedHistogramPlot(analysis, style, binEdges)
+    % Format the normalized histogram plot
+    
+    xlabel(['Hourly ' analysis.modeDisplayString], ...
+        'FontSize', style.labelFontSize, 'FontWeight', 'bold');
+    ylabel('Probability', 'FontSize', style.labelFontSize, 'FontWeight', 'bold');
+    
+    title(['Distribution of Hourly ' analysis.modeDisplayString ' (Normalized)'], ...
+        'FontSize', style.titleFontSize);
+    
+    set(gca, 'Color', style.axisBackgroundColor);
+    set(gca, 'FontSize', style.axisFontSize);
+    grid on;
+    
+    % Set x-axis limits
+    xlim([binEdges(1) binEdges(end)]);
+    
+    % Format y-axis as percentages
+    ytick_positions = yticks;
+    ytick_labels = arrayfun(@(v) sprintf('%.1f%%', v*100), ytick_positions, 'UniformOutput', false);
+    yticklabels(ytick_labels);
+end
+
+function plotHourlyCountHistogramOverlay(locationData, analysis, style)
+    % Alternative version: Overlay with transparency (good for similar distributions)
+    
+    figure('Position', [408 126 1000 700]);
+    hold on
+    
+    locationNames = fieldnames(locationData);
+    plotHandles = [];
+    
+    % Determine common bin edges
+    allCounts = [];
+    for i = 1:length(locationNames)
+        locationName = locationNames{i};
+        data = locationData.(locationName);
+        hourlyData = extractHourlyData(data, analysis);
+        allCounts = [allCounts; hourlyData.rawCounts];
+    end
+    
+    if ~isempty(allCounts)
+        maxCount = max(allCounts);
+        if maxCount <= 20
+            binEdges = 0:1:maxCount+1;
+        elseif maxCount <= 50
+            binEdges = 0:2:maxCount+2;
+        else
+            binEdges = 0:5:maxCount+5;
+        end
+    else
+        binEdges = 0:1:10;
+    end
+
+    binEdges = 0:1:maxCount+1; % Hard coded
+    
+    % Plot each location with high transparency for overlay effect
+    for i = 1:length(locationNames)
+        locationName = locationNames{i};
+        data = locationData.(locationName);
+        locationInfo = data.locationInfo;
+        
+        hourlyData = extractHourlyData(data, analysis);
+        
+        if ~isempty(hourlyData.rawCounts)
+            h = histogram(hourlyData.rawCounts, binEdges, ...
+                'FaceColor', locationInfo.plotColor, ...
+                'EdgeColor', 'none', ...
+                'FaceAlpha', 0.5, ...  % High transparency for overlay
+                'DisplayName', sprintf('%s (n=%s)', ...
+                    locationInfo.name, ...
+                    num2sepstr(length(hourlyData.rawCounts), '%.0f')));
+            
+            plotHandles = [plotHandles, h];
+        end
+    end
+    
+    % Format plot
+    formatHistogramPlot(analysis, style, binEdges);
+    
+    % Add legend
+    if ~isempty(plotHandles)
+        legend(plotHandles, 'Location', 'northeast', 'Color', style.axisBackgroundColor, ...
+            'FontSize', style.legendFontSize);
+    end
+    
+    hold off
+end
+
