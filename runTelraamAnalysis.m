@@ -191,7 +191,7 @@ plotCombinedMonthly(locationData, weatherData, analysis, plots, style);
 plotHourlyPatterns(locationData, analysis, plots, style);
 
 %% Generate Temperature Scatter Plot
-plotTemperatureScatter(locationData, weatherData, analysis, plots, style);
+plotTemperatureScatterWeekly(locationData, weatherData, analysis, plots, style);
 %plotTemperatureScatterSeasonal(locationData, weatherData, analysis, plots, style);
 
 %% Generate Modality Pie Charts
@@ -4107,4 +4107,206 @@ function plotZeroIntervalAnalysis(locationData, analysis, style)
     end
     
     sgtitle('Zero Count Interval Analysis', 'FontSize', style.titleFontSize);
+end
+
+function plotTemperatureScatterWeekly(locationData, weatherData, analysis, plots, style)
+    % Plot scatter plot of weekly counts versus average weekly air temperature for all locations
+    % This is the weekly equivalent of plotTemperatureScatter()
+    
+    figure('Position', [408 126 1132 921]);
+    hold on
+    
+    locationNames = fieldnames(locationData);
+    plotHandles = [];
+    
+    % Plot each location with different colors
+    for i = 1:length(locationNames)
+        locationName = locationNames{i};
+        data = locationData.(locationName);
+        locationInfo = data.locationInfo;
+        
+        % Calculate weekly totals and match with weather data
+        [weeklyCounts, weeklyTemperatures, validWeekStarts] = prepareWeeklyTemperatureData(data, weatherData, analysis);
+        
+        if ~isempty(weeklyCounts)
+            % Create scatter plot
+            h = scatter(weeklyTemperatures, weeklyCounts, 80, ...
+                'MarkerEdgeColor', locationInfo.plotColor, ...
+                'MarkerFaceColor', locationInfo.plotColor, ...
+                'MarkerFaceAlpha', 0.6, ...
+                'MarkerEdgeAlpha', 0.8, ...
+                'DisplayName', sprintf('%s (%d weeks)', locationInfo.name, length(weeklyCounts)));
+            plotHandles = [plotHandles, h];
+            
+            % Add piecewise linear trend line with breakpoint at 0°C
+            if length(weeklyTemperatures) > 5
+                [trendParams, trendStats] = fitPiecewiseLinear(weeklyTemperatures, weeklyCounts);
+                
+                if ~isempty(trendParams)
+                    % Plot the piecewise linear trend
+                    tempRange = linspace(min(weeklyTemperatures), max(weeklyTemperatures), 100);
+                    trendLine = evaluatePiecewiseLinear(tempRange, trendParams);
+                    
+                    plot(tempRange, trendLine, '--', ...
+                        'Color', locationInfo.plotColor, ...
+                        'LineWidth', 2, ...
+                        'HandleVisibility', 'off');  % Don't show in legend
+                    
+                    % Store trend stats for later display
+                    locationInfo.trendStats = trendStats;
+                end
+            end
+        end
+    end
+    
+    % Format plot
+    formatWeeklyTemperatureScatterPlot(analysis, style);
+    
+    % Add correlation statistics
+    addWeeklyCorrelationStats(locationData, weatherData, analysis, style);
+    
+    % Add legend
+    if ~isempty(plotHandles)
+        legend(plotHandles, 'Location', 'northeast', 'Color', style.axisBackgroundColor, ...
+            'FontSize', style.legendFontSize);
+    end
+    
+    hold off
+end
+
+function [weeklyCounts, weeklyTemperatures, validWeekStarts] = prepareWeeklyTemperatureData(locationDataStruct, weatherData, analysis)
+    % Prepare matched weekly counts and temperature data
+    
+    % Extract the data timetable from the structure
+    data = locationDataStruct.data;
+    
+    % Calculate weekly totals using the existing yearWeekKey approach
+    groupedData = groupsummary(data, 'yearWeekKey', 'sum', analysis.modeString);
+    
+    % Get week start dates for each yearWeekKey
+    weekStartGrouped = groupsummary(data, 'yearWeekKey', 'min', 'weekStartDateTimes');
+    
+    % Create weekly data table
+    sumColumnName = ['sum_' analysis.modeString];
+    weeklyData = table(weekStartGrouped.min_weekStartDateTimes, ...
+        groupedData.(sumColumnName), ...
+        'VariableNames', {'WeekStart', 'Count'});
+    
+    % Match indices between weekly data and week starts
+    [~, ia, ib] = intersect(groupedData.yearWeekKey, weekStartGrouped.yearWeekKey);
+    weeklyData = weeklyData(ib, :);  % Align the data properly
+    
+    % Aggregate weather data to weekly averages
+    weeklyWeatherData = aggregateWeatherToWeekly(weatherData);
+    
+    % Match weekly counts with weekly weather data
+    [~, ic, id] = intersect(weeklyData.WeekStart, weeklyWeatherData.weekStarts);
+    
+    if isempty(ic)
+        % No matching weeks
+        weeklyCounts = [];
+        weeklyTemperatures = [];
+        validWeekStarts = [];
+        return;
+    end
+    
+    % Extract matched data
+    weeklyCounts = weeklyData.Count(ic);
+    weeklyTemperatures = weeklyWeatherData.avgTemperature(id);
+    validWeekStarts = weeklyData.WeekStart(ic);
+    
+    % Remove any NaN values
+    validIdx = ~isnan(weeklyCounts) & ~isnan(weeklyTemperatures);
+    weeklyCounts = weeklyCounts(validIdx);
+    weeklyTemperatures = weeklyTemperatures(validIdx);
+    validWeekStarts = validWeekStarts(validIdx);
+end
+
+function formatWeeklyTemperatureScatterPlot(analysis, style)
+    % Format the weekly temperature scatter plot
+    
+    xlabel('Average Weekly Air Temperature (°C)', 'FontSize', style.labelFontSize, 'FontWeight', 'bold');
+    ylabel(['Weekly ' analysis.modeDisplayString], 'FontSize', style.labelFontSize, 'FontWeight', 'bold');
+    
+    title(['Weekly ' analysis.modeDisplayString ' vs Average Weekly Air Temperature'], ...
+        'FontSize', style.titleFontSize);
+    
+    set(gca, 'Color', style.axisBackgroundColor);
+    set(gca, 'FontSize', style.axisFontSize);
+    grid on;
+    
+    % Format y-axis with separators
+    ytick_positions = yticks;
+    ytick_labels = arrayfun(@(v) num2sepstr(v, '%.0f'), ytick_positions, 'UniformOutput', false);
+    yticklabels(ytick_labels);
+    
+    % Ensure y-axis starts at 0
+    ylim([0 max(ylim) * 1.05]);
+    
+    % Add temperature reference lines (optional)
+    xLimits = xlim;
+    
+    % Add vertical lines for key temperatures
+    line([0 0], ylim, 'Color', [0.7 0.7 1], 'LineStyle', ':', 'LineWidth', 1, 'HandleVisibility', 'off');
+    line([10 10], ylim, 'Color', [0.7 0.7 0.7], 'LineStyle', ':', 'LineWidth', 1, 'HandleVisibility', 'off');
+    line([20 20], ylim, 'Color', [0.7 0.7 0.7], 'LineStyle', ':', 'LineWidth', 1, 'HandleVisibility', 'off');
+    
+    % Add temperature labels
+    text(0, max(ylim) * 0.95, '0°C', 'HorizontalAlignment', 'center', 'FontSize', style.axisFontSize * 0.8, 'Color', [0.6 0.6 0.6]);
+    text(10, max(ylim) * 0.95, '10°C', 'HorizontalAlignment', 'center', 'FontSize', style.axisFontSize * 0.8, 'Color', [0.6 0.6 0.6]);
+    text(20, max(ylim) * 0.95, '20°C', 'HorizontalAlignment', 'center', 'FontSize', style.axisFontSize * 0.8, 'Color', [0.6 0.6 0.6]);
+end
+
+function addWeeklyCorrelationStats(locationData, weatherData, analysis, style)
+    % Add piecewise linear model statistics as text annotation for weekly data
+    
+    locationNames = fieldnames(locationData);
+    statsText = {};
+    
+    for i = 1:length(locationNames)
+        locationName = locationNames{i};
+        data = locationData.(locationName);
+        locationInfo = data.locationInfo;
+        
+        % Get weekly data for analysis
+        [weeklyCounts, weeklyTemperatures, ~] = prepareWeeklyTemperatureData(data, weatherData, analysis);
+        
+        if length(weeklyCounts) > 5
+            % Fit piecewise linear model
+            [trendParams, trendStats] = fitPiecewiseLinear(weeklyTemperatures, weeklyCounts);
+            
+            if ~isempty(trendParams)
+                % Format statistics for display
+                belowFreezing = sprintf('T<0°C: slope=%.1f', trendStats.slopeBelow);
+                aboveFreezing = sprintf('T≥0°C: slope=%.1f', trendStats.slopeAbove);
+                rSquared = sprintf('R²=%.3f', trendStats.rSquared);
+                
+                statsText{end+1} = sprintf('%s: %s, %s, %s', ...
+                    locationInfo.name, belowFreezing, aboveFreezing, rSquared);
+            else
+                % Fallback to simple correlation if piecewise fit fails
+                corrCoeff = corr(weeklyTemperatures, weeklyCounts, 'type', 'Pearson');
+                statsText{end+1} = sprintf('%s: r = %.3f (simple)', locationInfo.name, corrCoeff);
+            end
+        end
+    end
+    
+    % Display statistics
+    if ~isempty(statsText)
+        % Position text box in upper left
+        xLimits = xlim;
+        yLimits = ylim;
+        
+        textX = xLimits(1) + 0.05 * (xLimits(2) - xLimits(1));
+        textY = yLimits(2) - 0.1 * (yLimits(2) - yLimits(1));
+        
+        % Create text box
+        textStr = strjoin(statsText, '\n');
+        text(textX, textY, textStr, ...
+            'FontSize', style.axisFontSize * 0.9, ...
+            'VerticalAlignment', 'top', ...
+            'BackgroundColor', [1 1 1 0.9], ...
+            'EdgeColor', [0.7 0.7 0.7], ...
+            'Margin', 5);
+    end
 end
