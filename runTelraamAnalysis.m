@@ -31,7 +31,7 @@ modeString = 'Bike Total'; modeDisplayString = 'Bike Counts';
 
 analysis = struct( ...
     'startTime', datetime(2024,08,15,00,00,01), ...
-    'endTime', datetime(2025,06,15,23,59,59), ...
+    'endTime', datetime(2025,06,29,23,59,59), ...
     'modeString', modeString, ...
     'modeDisplayString', modeDisplayString, ...
     'uptimeThreshold', 0.0, ...
@@ -49,8 +49,9 @@ analysis = struct( ...
     ) ...
 );
 
-dateSpan = 'winter';
+%dateSpan = 'winter';
 %dateSpan = 'springSummer';
+%dateSpan = 'lastWeek';
 
 if exist('dateSpan', 'var')
     if strcmp(dateSpan,'winter')
@@ -58,6 +59,8 @@ if exist('dateSpan', 'var')
         analysis.endTime = datetime(2025,03,31,23,59,59);
     elseif strcmp(dateSpan,'springSummer')
         analysis.startTime = datetime(2025,04,01,23,59,59);
+    elseif strcmp(dateSpan,'lastWeek')
+        analysis.startTime = analysis.endTime - days(7) + seconds(2);
     end
 end
 
@@ -2220,7 +2223,7 @@ function plotMonthlyDayOfWeekPatterns(dayOfWeekData, analysis, style, locationNa
         monthPattern = dayOfWeekData.monthlyPatterns{monthIdx};
         
         if ~all(isnan(monthPattern))
-            monthTotal = sum(monthPattern, 'omitnan') * 7; % Weekly total
+            monthTotal = sum(monthPattern, 'omitnan'); % Weekly total
             
             % Use subtle colors for individual months, emphasize most recent
             if monthIdx == length(dayOfWeekData.months)
@@ -2247,9 +2250,9 @@ function plotMonthlyDayOfWeekPatterns(dayOfWeekData, analysis, style, locationNa
                 'LineWidth', lineWidth, ...
                 'MarkerSize', markerSize, ...
                 'Color', [colorMap(monthIdx, :) alpha], ...
-                'DisplayName', sprintf('%s (weekly total ≈ %s)', ...
+                'DisplayName', sprintf('%s (daily average ≈ %s)', ...
                     datestr(dayOfWeekData.months(monthIdx), 'mmm yyyy'), ...
-                    num2sepstr(monthTotal, '%.0f')));
+                    num2sepstr(monthTotal./7, '%.0f')));
             plotHandles = [plotHandles, h];
         end
     end
@@ -2423,6 +2426,7 @@ function [dailyCounts, dailyTemperatures, validDates] = prepareDailyTemperatureD
     % Extract matched data
     dailyCounts = dailyData.Count(ia);
     dailyTemperatures = weatherData.temperature(ib);
+    %dailyTemperatures = weatherData.feelslike(ib);
     validDates = dailyData.Date(ia);
     
     % Remove any NaN values
@@ -3928,6 +3932,28 @@ function [longestInterval, allIntervals, stats] = findZeroIntervals(locationData
         
         allIntervals = [allIntervals; interval];
     end
+
+    % NEW: Filter out intervals that span multiple dates
+    % These likely include nighttime periods when detection is impossible
+    if ~isempty(allIntervals)
+        startDates = dateshift([allIntervals.startTime], 'start', 'day');
+        endDates = dateshift([allIntervals.endTime], 'start', 'day');
+        sameDayIntervals = (startDates == endDates);
+        
+        % Keep only same-day intervals
+        filteredIntervals = allIntervals(sameDayIntervals);
+        
+        % Report filtering statistics
+        originalCount = length(allIntervals);
+        filteredCount = length(filteredIntervals);
+        removedCount = originalCount - filteredCount;
+        
+        fprintf('  Filtered out %d overnight intervals (keeping %d same-day intervals)\n', ...
+            removedCount, filteredCount);
+        
+        % Update allIntervals to contain only same-day intervals
+        allIntervals = filteredIntervals;
+    end
     
     % Find longest interval
     if ~isempty(allIntervals)
@@ -3992,13 +4018,13 @@ function reportZeroIntervals(longestInterval, allIntervals, stats, locationName,
         end
         
         % Show top 5 longest intervals if there are multiple
-        topNum = 20;
+        numTop = 20;
         if length(allIntervals) > 1
-            fprintf(['\n  TOP ' num2str(topNum) ' LONGEST ZERO INTERVALS:\n']);
+            fprintf(['\n  TOP ' num2str(numTop) ' LONGEST ZERO INTERVALS:\n']);
             durations = [allIntervals.duration];
             [sortedDurations, sortIdx] = sort(durations, 'descend');
             
-            numToShow = min(topNum, length(allIntervals));
+            numToShow = min(numTop, length(allIntervals));
             for i = 1:numToShow
                 idx = sortIdx(i);
                 interval = allIntervals(idx);
