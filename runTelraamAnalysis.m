@@ -31,7 +31,7 @@ modeString = 'Bike Total'; modeDisplayString = 'Bike Counts';
 
 analysis = struct( ...
     'startTime', datetime(2024,08,15,00,00,01), ...
-    'endTime', datetime(2025,06,29,23,59,59), ...
+    'endTime', datetime(2025,06,30,23,59,59), ...
     'modeString', modeString, ...
     'modeDisplayString', modeDisplayString, ...
     'uptimeThreshold', 0.0, ...
@@ -52,6 +52,7 @@ analysis = struct( ...
 %dateSpan = 'winter';
 %dateSpan = 'springSummer';
 %dateSpan = 'lastWeek';
+dateSpan = 'lastMonth';
 
 if exist('dateSpan', 'var')
     if strcmp(dateSpan,'winter')
@@ -61,6 +62,8 @@ if exist('dateSpan', 'var')
         analysis.startTime = datetime(2025,04,01,23,59,59);
     elseif strcmp(dateSpan,'lastWeek')
         analysis.startTime = analysis.endTime - days(7) + seconds(2);
+    elseif strcmp(dateSpan,'lastMonth')
+        analysis.startTime = dateshift(analysis.endTime,'start','month') + seconds(2);
     end
 end
 
@@ -141,14 +144,15 @@ if exist(cacheFilename, 'file')
 else
     % Get weather data from API
     fprintf('Getting weather data for %d days from API...\n', length(uniqueDays));
-    [precipitationData, temperatureData, sunriseData, sunsetData, sunhoursData, snowData, windspeedData, feelslikeData] = ...
+    [precipitationData, averageTemperatureData, minTemperatureData, maxTemperatureData, sunriseData, sunsetData, sunhoursData, snowData, windspeedData, feelslikeData] = ...
         getWeatherstackData('Montreal', dailyNoonTimes);
     
     % Store weather data correctly - extract the actual vectors
     weatherData = struct();
     weatherData.dates = uniqueDays;
     weatherData.precipitation = precipitationData;
-    weatherData.temperature = temperatureData;
+    weatherData.temperature = averageTemperatureData;
+    %weatherData.temperature = maxTemperatureData;
     weatherData.feelslike = feelslikeData;
     weatherData.windspeed = windspeedData;
     weatherData.sunrise = sunriseData;
@@ -194,8 +198,9 @@ plotHourlyPatterns(locationData, analysis, plots, style);
 plotTemperatureScatterWeekly(locationData, weatherData, analysis, plots, style);
 %plotTemperatureScatterSeasonal(locationData, weatherData, analysis, plots, style);
 
-%% Generate Modality Pie Charts
+%% Generate Modality Pie and Bar Charts
 plotModalityPieCharts(locationData, analysis, style);
+plotModalityBarChart(locationData, analysis, style);
 
 %% Generate Multi-Modal Plots (if enabled)
 if multiModal.enabled
@@ -484,7 +489,7 @@ function formatCombinedPlot(analysis, plots, style, weatherData)
 end
 
 % Keep your existing utility functions
-function [precipitationValues, temperatureValues, sunriseValues, sunsetValues, sunhoursValues, snowValues, windspeedValues, feelslikeValues] = getWeatherstackData(location, dates)
+function [precipitationValues, averageTemperatureValues, minTemperatureValues, maxTemperatureValues, sunriseValues, sunsetValues, sunhoursValues, snowValues, windspeedValues, feelslikeValues] = getWeatherstackData(location, dates)
     % Define the base URL for Weatherstack API
     baseURL = 'http://api.weatherstack.com/historical';
     
@@ -497,7 +502,9 @@ function [precipitationValues, temperatureValues, sunriseValues, sunsetValues, s
     windspeedValues = [];
     feelslikeValues = [];
     snowValues = [];
-    temperatureValues = [];
+    averageTemperatureValues = [];
+    minTemperatureValues = [];
+    maxTemperatureValues = [];
     sunhoursValues = [];
     
     for ix=1:numDates
@@ -518,6 +525,8 @@ function [precipitationValues, temperatureValues, sunriseValues, sunsetValues, s
         feelslike = response.historical.(['x' strrep(dateStr,'-','_')]).hourly.feelslike;
         temperature = response.historical.(['x' strrep(dateStr,'-','_')]).hourly.temperature;
         avgtemp = response.historical.(['x' strrep(dateStr,'-','_')]).avgtemp;
+        mintemp = response.historical.(['x' strrep(dateStr,'-','_')]).mintemp;
+        maxtemp = response.historical.(['x' strrep(dateStr,'-','_')]).maxtemp;
         totalsnow = response.historical.(['x' strrep(dateStr,'-','_')]).totalsnow;
         sunhours = response.historical.(['x' strrep(dateStr,'-','_')]).sunhour;
         sunriseTimeStr = response.historical.(['x' strrep(dateStr,'-','_')]).astro.sunrise;
@@ -526,7 +535,9 @@ function [precipitationValues, temperatureValues, sunriseValues, sunsetValues, s
         precipitationValues(ix) = precipitation;
         windspeedValues(ix) = windspeed;
         feelslikeValues(ix) = feelslike;
-        temperatureValues(ix) = avgtemp;
+        averageTemperatureValues(ix) = avgtemp;
+        minTemperatureValues(ix) = mintemp;
+        maxTemperatureValues(ix) = maxtemp;
         snowValues(ix) = totalsnow;
         sunhoursValues(ix) = sunhours;
         sunriseTime = datetime(sunriseTimeStr, 'InputFormat', 'hh:mm a');
@@ -539,7 +550,9 @@ function [precipitationValues, temperatureValues, sunriseValues, sunsetValues, s
     windspeedValues = windspeedValues.';
     feelslikeValues = feelslikeValues.';
     snowValues = snowValues.';
-    temperatureValues = temperatureValues.';
+    averageTemperatureValues = averageTemperatureValues.';
+    minTemperatureValues = minTemperatureValues.';
+    maxTemperatureValues = maxTemperatureValues.';
     sunriseValues = sunriseValues.';
     sunsetValues = sunsetValues.';
     sunhoursValues = sunhoursValues.';
@@ -2759,7 +2772,7 @@ function plotModalityPieCharts(locationData, analysis, style)
     
     % Add overall figure title
     sgtitle(sprintf('Traffic Modality Breakdown (%s to %s)', ...
-        datestr(analysis.startTime, 'mmm dd yyyy'), datestr(analysis.endTime, 'mmm dd yyyy')), ...
+        datestr(analysis.startTime, 'mmm dd'), datestr(analysis.endTime, 'mmm dd yyyy')), ...
         'FontSize', style.titleFontSize + 2, 'FontWeight', 'bold');
 end
 
@@ -3015,7 +3028,7 @@ function plotModalityBarChart(locationData, analysis, style)
         set(gca, 'Color', style.axisBackgroundColor);
         
         title(sprintf('Traffic Modality Comparison (%s to %s)', ...
-            datestr(analysis.startTime, 'mmm yyyy'), datestr(analysis.endTime, 'mmm yyyy')), ...
+            datestr(analysis.startTime, 'mmm dd'), datestr(analysis.endTime, 'mmm dd yyyy')), ...
             'FontSize', style.titleFontSize, 'FontWeight', 'bold');
     end
 end
@@ -4147,7 +4160,7 @@ function plotTemperatureScatterWeekly(locationData, weatherData, analysis, plots
                     tempRange = linspace(min(weeklyTemperatures), max(weeklyTemperatures), 100);
                     trendLine = evaluatePiecewiseLinear(tempRange, trendParams);
                     
-                    plot(tempRange, trendLine, '--', ...
+                    plot(tempRange, trendLine, '-', ...
                         'Color', locationInfo.plotColor, ...
                         'LineWidth', 2, ...
                         'HandleVisibility', 'off');  % Don't show in legend
@@ -4310,3 +4323,4 @@ function addWeeklyCorrelationStats(locationData, weatherData, analysis, style)
             'Margin', 5);
     end
 end
+
