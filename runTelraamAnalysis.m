@@ -31,7 +31,7 @@ modeString = 'Bike Total'; modeDisplayString = 'Bike Counts';
 
 analysis = struct( ...
     'startTime', datetime(2024,08,15,00,00,01), ...
-    'endTime', datetime(2025,06,30,23,59,59), ...
+    'endTime', datetime(2025,07,13,23,59,59), ...
     'modeString', modeString, ...
     'modeDisplayString', modeDisplayString, ...
     'uptimeThreshold', 0.0, ...
@@ -52,7 +52,7 @@ analysis = struct( ...
 %dateSpan = 'winter';
 %dateSpan = 'springSummer';
 %dateSpan = 'lastWeek';
-dateSpan = 'lastMonth';
+%dateSpan = 'lastMonth';
 
 if exist('dateSpan', 'var')
     if strcmp(dateSpan,'winter')
@@ -92,7 +92,7 @@ style = struct( ...
 % Multi-modal analysis parameters
 multiModal = struct( ...
     'enabled', true, ...
-    'location', easternSegmentName, ...  % Which location to analyze
+    'location', westernSegmentName, ...  % Which location to analyze
     'modes', {{'Bike Total', 'Pedestrian Total', 'Car Total'}}, ...
     'modeDisplayNames', {{'Bike Counts', 'Pedestrian Counts', 'Car Counts'}}, ...
     'modeColors', {{[0 0 1], [0 0.8 0], [1 0 0], [0 0.8 0.8]}}, ...  % Note the double braces
@@ -197,6 +197,9 @@ plotHourlyPatterns(locationData, analysis, plots, style);
 %% Generate Temperature Scatter Plot
 plotTemperatureScatterWeekly(locationData, weatherData, analysis, plots, style);
 %plotTemperatureScatterSeasonal(locationData, weatherData, analysis, plots, style);
+
+%% Generate Scatter Plot comparing counts at the two locations
+plotLocationCorrelation(locationData, analysis, plots, style, 'daily');
 
 %% Generate Modality Pie and Bar Charts
 plotModalityPieCharts(locationData, analysis, style);
@@ -4324,3 +4327,433 @@ function addWeeklyCorrelationStats(locationData, weatherData, analysis, style)
     end
 end
 
+function plotLocationCorrelation(locationData, analysis, plots, style, aggregationLevel)
+    % Plot correlation scatter plot between counts at two locations
+    %
+    % Inputs:
+    %   locationData - structure containing data for all locations
+    %   analysis - analysis configuration structure
+    %   plots - plotting configuration structure  
+    %   style - plotting style configuration structure
+    %   aggregationLevel - string: 'hourly' | 'daily' | 'weekly' | 'monthly'
+    %
+    % This function creates a scatter plot showing the correlation between
+    % traffic counts at the two monitoring locations, with data aggregated
+    % according to the specified level.
+    
+    % Validate inputs
+    if nargin < 5
+        error('aggregationLevel parameter is required');
+    end
+    
+    validLevels = {'hourly', 'daily', 'weekly', 'monthly'};
+    if ~ismember(lower(aggregationLevel), validLevels)
+        error('aggregationLevel must be one of: %s', strjoin(validLevels, ', '));
+    end
+    
+    locationNames = fieldnames(locationData);
+    
+    % Ensure we have exactly two locations
+    if length(locationNames) ~= 2
+        error('This function requires exactly two locations. Found %d locations.', length(locationNames));
+    end
+    
+    % Extract data for both locations
+    location1Name = locationNames{1};
+    location2Name = locationNames{2};
+    
+    location1Data = locationData.(location1Name);
+    location2Data = locationData.(location2Name);
+    
+    location1Info = location1Data.locationInfo;
+    location2Info = location2Data.locationInfo;
+    
+    % Get aggregated data for both locations based on specified level
+    switch lower(aggregationLevel)
+        case 'hourly'
+            [counts1, counts2, timePoints, validIdx] = prepareHourlyCorrelationData(location1Data, location2Data, analysis);
+            timeAxisLabel = 'Time';
+            titleSuffix = 'Hourly';
+            
+        case 'daily'
+            [counts1, counts2, timePoints, validIdx] = prepareDailyCorrelationData(location1Data, location2Data, analysis);
+            timeAxisLabel = 'Date';
+            titleSuffix = 'Daily';
+            
+        case 'weekly'
+            [counts1, counts2, timePoints, validIdx] = prepareWeeklyCorrelationData(location1Data, location2Data, analysis);
+            timeAxisLabel = 'Week Starting';
+            titleSuffix = 'Weekly';
+            
+        case 'monthly'
+            [counts1, counts2, timePoints, validIdx] = prepareMonthlyCorrelationData(location1Data, location2Data, analysis);
+            timeAxisLabel = 'Month';
+            titleSuffix = 'Monthly';
+            
+        otherwise
+            error('Invalid aggregation level: %s', aggregationLevel);
+    end
+    
+    % Check if we have sufficient data
+    if isempty(counts1) || isempty(counts2) || length(counts1) < 3
+        warning('Insufficient data for correlation analysis at %s level. Need at least 3 data points.', aggregationLevel);
+        fprintf('Found %d matching data points between locations.\n', length(counts1));
+        return;
+    end
+    
+    % Create the figure
+    figure('Position', [408 126 1132 921]);
+    
+    % Calculate correlation statistics
+    [corrStats, trendStats] = calculateCorrelationStats(counts1, counts2);
+    
+    % Create the scatter plot
+    h = scatter(counts1, counts2, 60, ...
+        'MarkerFaceColor', [0.2 0.4 0.8], ...
+        'MarkerEdgeColor', [0.1 0.2 0.6], ...
+        'MarkerFaceAlpha', 0.6, ...
+        'MarkerEdgeAlpha', 0.8);
+    
+    hold on;
+    
+    % Add trend line
+    if ~isempty(trendStats)
+        xRange = linspace(min(counts1), max(counts1), 100);
+        trendLine = trendStats.slope * xRange + trendStats.intercept;
+        
+        plot(xRange, trendLine, '-', ...
+            'Color', [0.8 0.2 0.2], ...
+            'LineWidth', 2, ...
+            'DisplayName', sprintf('Trend: y = %.3fx + %.1f', trendStats.slope, trendStats.intercept));
+    end
+    
+    % Add 1:1 reference line for comparison
+    minVal = min([min(counts1), min(counts2)]);
+    maxVal = max([max(counts1), max(counts2)]);
+    plot([minVal maxVal], [minVal maxVal], '--', ...
+        'Color', [0.5 0.5 0.5], ...
+        'LineWidth', 1, ...
+        'DisplayName', '1:1 Reference');
+    
+    % Format the plot
+    formatCorrelationPlot(location1Info, location2Info, analysis, style, titleSuffix, corrStats);
+    
+    % Add correlation statistics text box
+    addCorrelationStatsBox(corrStats, trendStats, style, length(counts1));
+    
+    % Add legend if trend line was plotted
+    if ~isempty(trendStats)
+        legend('Data Points', 'Trend Line', '1:1 Reference', ...
+            'Location', 'northwest', 'Color', style.axisBackgroundColor, ...
+            'FontSize', style.legendFontSize);
+    end
+    
+    hold off;
+    
+    % Optional: Print summary statistics to console
+    printCorrelationSummary(location1Info, location2Info, corrStats, trendStats, titleSuffix, length(counts1));
+end
+
+function [counts1, counts2, timePoints, validIdx] = prepareHourlyCorrelationData(location1Data, location2Data, analysis)
+    % Prepare hourly data for correlation analysis
+    
+    % Extract hourly data for both locations
+    data1 = location1Data.data;
+    data2 = location2Data.data;
+    
+    % Get time series and counts
+    times1 = data1.('Date and Time (Local)');
+    times2 = data2.('Date and Time (Local)');
+    counts1_raw = data1.(analysis.modeString);
+    counts2_raw = data2.(analysis.modeString);
+    
+    % Find common time points
+    [commonTimes, ia, ib] = intersect(times1, times2);
+    
+    if isempty(commonTimes)
+        counts1 = [];
+        counts2 = [];
+        timePoints = [];
+        validIdx = [];
+        return;
+    end
+    
+    % Extract counts for common time points
+    counts1 = counts1_raw(ia);
+    counts2 = counts2_raw(ib);
+    timePoints = commonTimes;
+    
+    % Remove NaN values
+    validIdx = ~isnan(counts1) & ~isnan(counts2);
+    counts1 = counts1(validIdx);
+    counts2 = counts2(validIdx);
+    timePoints = timePoints(validIdx);
+end
+
+function [counts1, counts2, timePoints, validIdx] = prepareDailyCorrelationData(location1Data, location2Data, analysis)
+    % Prepare daily aggregated data for correlation analysis
+    
+    % Calculate daily totals for both locations
+    dailyData1 = calculateDailyTotals(location1Data, analysis);
+    dailyData2 = calculateDailyTotals(location2Data, analysis);
+    
+    % Find common dates
+    [commonDates, ia, ib] = intersect(dailyData1.dates, dailyData2.dates);
+    
+    if isempty(commonDates)
+        counts1 = [];
+        counts2 = [];
+        timePoints = [];
+        validIdx = [];
+        return;
+    end
+    
+    % Extract counts for common dates
+    counts1 = dailyData1.rawCounts(ia);
+    counts2 = dailyData2.rawCounts(ib);
+    timePoints = commonDates;
+    
+    % Remove NaN values
+    validIdx = ~isnan(counts1) & ~isnan(counts2);
+    counts1 = counts1(validIdx);
+    counts2 = counts2(validIdx);
+    timePoints = timePoints(validIdx);
+end
+
+function [counts1, counts2, timePoints, validIdx] = prepareWeeklyCorrelationData(location1Data, location2Data, analysis)
+    % Prepare weekly aggregated data for correlation analysis
+    
+    % Calculate weekly totals for both locations
+    weeklyData1 = calculateWeeklyTotals(location1Data, analysis);
+    weeklyData2 = calculateWeeklyTotals(location2Data, analysis);
+    
+    % Find common week starts
+    [commonWeeks, ia, ib] = intersect(weeklyData1.weekStarts, weeklyData2.weekStarts);
+    
+    if isempty(commonWeeks)
+        counts1 = [];
+        counts2 = [];
+        timePoints = [];
+        validIdx = [];
+        return;
+    end
+    
+    % Extract counts for common weeks
+    counts1 = weeklyData1.rawCounts(ia);
+    counts2 = weeklyData2.rawCounts(ib);
+    timePoints = commonWeeks;
+    
+    % Remove NaN values
+    validIdx = ~isnan(counts1) & ~isnan(counts2);
+    counts1 = counts1(validIdx);
+    counts2 = counts2(validIdx);
+    timePoints = timePoints(validIdx);
+end
+
+function [counts1, counts2, timePoints, validIdx] = prepareMonthlyCorrelationData(location1Data, location2Data, analysis)
+    % Prepare monthly aggregated data for correlation analysis
+    
+    % Calculate monthly totals for both locations
+    monthlyData1 = calculateMonthlyTotals(location1Data, analysis);
+    monthlyData2 = calculateMonthlyTotals(location2Data, analysis);
+    
+    % Check if either location has no monthly data
+    if isempty(monthlyData1.monthStarts) || isempty(monthlyData2.monthStarts)
+        counts1 = [];
+        counts2 = [];
+        timePoints = [];
+        validIdx = [];
+        return;
+    end
+    
+    % Find common months
+    [commonMonths, ia, ib] = intersect(monthlyData1.monthStarts, monthlyData2.monthStarts);
+    
+    if isempty(commonMonths)
+        counts1 = [];
+        counts2 = [];
+        timePoints = [];
+        validIdx = [];
+        return;
+    end
+    
+    % Extract counts for common months
+    counts1 = monthlyData1.rawCounts(ia);
+    counts2 = monthlyData2.rawCounts(ib);
+    timePoints = commonMonths;
+    
+    % Remove NaN values
+    validIdx = ~isnan(counts1) & ~isnan(counts2);
+    counts1 = counts1(validIdx);
+    counts2 = counts2(validIdx);
+    timePoints = timePoints(validIdx);
+end
+
+function [corrStats, trendStats] = calculateCorrelationStats(counts1, counts2)
+    % Calculate correlation and trend statistics
+    
+    corrStats = struct();
+    trendStats = struct();
+    
+    % Pearson correlation
+    [r, p] = corrcoef(counts1, counts2);
+    corrStats.pearsonR = r(1,2);
+    corrStats.pearsonP = p(1,2);
+    
+    % Spearman correlation (rank-based, more robust to outliers)
+    corrStats.spearmanRho = corr(counts1, counts2, 'type', 'Spearman');
+    
+    % R-squared
+    corrStats.rSquared = corrStats.pearsonR^2;
+    
+    % Linear regression for trend line
+    try
+        p = polyfit(counts1, counts2, 1);
+        trendStats.slope = p(1);
+        trendStats.intercept = p(2);
+        
+        % Calculate regression statistics
+        yPred = polyval(p, counts1);
+        SSres = sum((counts2 - yPred).^2);
+        SStot = sum((counts2 - mean(counts2)).^2);
+        trendStats.rSquared = 1 - SSres/SStot;
+        
+        % Standard error of regression
+        trendStats.standardError = sqrt(SSres / (length(counts1) - 2));
+        
+    catch
+        trendStats = [];
+    end
+    
+    % Basic descriptive statistics
+    corrStats.mean1 = mean(counts1);
+    corrStats.mean2 = mean(counts2);
+    corrStats.std1 = std(counts1);
+    corrStats.std2 = std(counts2);
+    corrStats.n = length(counts1);
+end
+
+function formatCorrelationPlot(location1Info, location2Info, analysis, style, titleSuffix, corrStats)
+    % Format the correlation scatter plot
+    
+    % Create short names for axis labels
+    loc1Short = extractLocationShortName(location1Info.name);
+    loc2Short = extractLocationShortName(location2Info.name);
+    
+    xlabel([titleSuffix ' ' analysis.modeDisplayString ' - ' loc1Short], ...
+        'FontSize', style.labelFontSize, 'FontWeight', 'bold');
+    ylabel([titleSuffix ' ' analysis.modeDisplayString ' - ' loc2Short], ...
+        'FontSize', style.labelFontSize, 'FontWeight', 'bold');
+    
+    title(sprintf('%s %s Correlation: %s vs %s', ...
+        titleSuffix, analysis.modeDisplayString, loc1Short, loc2Short), ...
+        'FontSize', style.titleFontSize);
+    
+    % Add subtitle with correlation coefficient
+    subtitle(sprintf('Pearson r = %.3f (R² = %.3f, n = %d)', ...
+        corrStats.pearsonR, corrStats.rSquared, corrStats.n), ...
+        'FontSize', style.axisFontSize, 'Color', [0.3 0.3 0.3]);
+    
+    set(gca, 'Color', style.axisBackgroundColor);
+    set(gca, 'FontSize', style.axisFontSize);
+    grid on;
+    
+    % Format both axes with separators
+    xtick_positions = xticks;
+    xtick_labels = arrayfun(@(v) num2sepstr(v, '%.0f'), xtick_positions, 'UniformOutput', false);
+    xticklabels(xtick_labels);
+    
+    ytick_positions = yticks;
+    ytick_labels = arrayfun(@(v) num2sepstr(v, '%.0f'), ytick_positions, 'UniformOutput', false);
+    yticklabels(ytick_labels);
+    
+    % Ensure both axes start at 0 and have equal scaling for easier comparison
+    maxVal = max([xlim, ylim]);
+    xlim([0 maxVal * 1.05]);
+    ylim([0 maxVal * 1.05]);
+    
+    % Make the plot square for better visual comparison
+    axis equal;
+    axis([0 maxVal*1.05 0 maxVal*1.05]);
+end
+
+function addCorrelationStatsBox(corrStats, trendStats, style, nPoints)
+    % Add a text box with correlation statistics
+    
+    statsText = {};
+    statsText{end+1} = sprintf('Sample Size: %d', nPoints);
+    statsText{end+1} = sprintf('Pearson r: %.3f', corrStats.pearsonR);
+    statsText{end+1} = sprintf('R²: %.3f', corrStats.rSquared);
+    statsText{end+1} = sprintf('Spearman ρ: %.3f', corrStats.spearmanRho);
+    
+    if corrStats.pearsonP < 0.001
+        statsText{end+1} = 'p < 0.001';
+    else
+        statsText{end+1} = sprintf('p = %.3f', corrStats.pearsonP);
+    end
+    
+    if ~isempty(trendStats)
+        statsText{end+1} = sprintf('Slope: %.3f', trendStats.slope);
+        if abs(trendStats.intercept) < 1
+            statsText{end+1} = sprintf('Intercept: %.2f', trendStats.intercept);
+        else
+            statsText{end+1} = sprintf('Intercept: %.1f', trendStats.intercept);
+        end
+    end
+    
+    % Position text box in upper left
+    xLimits = xlim;
+    yLimits = ylim;
+    
+    textX = xLimits(1) + 0.05 * (xLimits(2) - xLimits(1));
+    textY = yLimits(2) - 0.05 * (yLimits(2) - yLimits(1));
+    
+    % Create text box
+    textStr = strjoin(statsText, '\n');
+    text(textX, textY, textStr, ...
+        'FontSize', style.axisFontSize * 0.9, ...
+        'VerticalAlignment', 'top', ...
+        'BackgroundColor', [1 1 1 0.9], ...
+        'EdgeColor', [0.7 0.7 0.7], ...
+        'Margin', 5);
+end
+
+function printCorrelationSummary(location1Info, location2Info, corrStats, trendStats, titleSuffix, nPoints)
+    % Print correlation summary to console
+    
+    fprintf('\n=== %s Correlation Analysis ===\n', titleSuffix);
+    fprintf('Location 1: %s\n', location1Info.name);
+    fprintf('Location 2: %s\n', location2Info.name);
+    fprintf('Sample Size: %d\n', nPoints);
+    fprintf('Pearson Correlation: r = %.3f (R² = %.3f)\n', corrStats.pearsonR, corrStats.rSquared);
+    fprintf('Spearman Correlation: ρ = %.3f\n', corrStats.spearmanRho);
+    
+    if corrStats.pearsonP < 0.001
+        fprintf('Statistical Significance: p < 0.001\n');
+    else
+        fprintf('Statistical Significance: p = %.3f\n', corrStats.pearsonP);
+    end
+    
+    if ~isempty(trendStats)
+        fprintf('Linear Trend: y = %.3fx + %.1f\n', trendStats.slope, trendStats.intercept);
+        fprintf('Standard Error: %.2f\n', trendStats.standardError);
+    end
+    
+    % Interpret correlation strength
+    absR = abs(corrStats.pearsonR);
+    if absR >= 0.9
+        strength = 'very strong';
+    elseif absR >= 0.7
+        strength = 'strong';
+    elseif absR >= 0.5
+        strength = 'moderate';
+    elseif absR >= 0.3
+        strength = 'weak';
+    else
+        strength = 'very weak';
+    end
+    
+    direction = ternary(corrStats.pearsonR > 0, 'positive', 'negative');
+    fprintf('Interpretation: %s %s correlation\n', strength, direction);
+    fprintf('=====================================\n\n');
+end
