@@ -31,7 +31,7 @@ modeString = 'Bike Total'; modeDisplayString = 'Bike Counts';
 
 analysis = struct( ...
     'startTime', datetime(2024,08,15,00,00,01), ...
-    'endTime', datetime(2025,07,13,23,59,59), ...
+    'endTime', datetime(2025,07,31,23,59,59), ...
     'modeString', modeString, ...
     'modeDisplayString', modeDisplayString, ...
     'uptimeThreshold', 0.0, ...
@@ -92,7 +92,7 @@ style = struct( ...
 % Multi-modal analysis parameters
 multiModal = struct( ...
     'enabled', true, ...
-    'location', westernSegmentName, ...  % Which location to analyze
+    'location', easternSegmentName, ...  % Which location to analyze
     'modes', {{'Bike Total', 'Pedestrian Total', 'Car Total'}}, ...
     'modeDisplayNames', {{'Bike Counts', 'Pedestrian Counts', 'Car Counts'}}, ...
     'modeColors', {{[0 0 1], [0 0.8 0], [1 0 0], [0 0.8 0.8]}}, ...  % Note the double braces
@@ -136,33 +136,35 @@ startDateStr = datestr(uniqueDays(1), 'yyyy-mm-dd');
 endDateStr = datestr(uniqueDays(end), 'yyyy-mm-dd');
 cacheFilename = sprintf('weatherCache_%s_to_%s.mat', startDateStr, endDateStr);
 
-% Check if cached data exists
-if exist(cacheFilename, 'file')
-    fprintf('Loading cached weather data from %s...\n', cacheFilename);
-    load(cacheFilename, 'weatherData');
-    fprintf('Loaded weather data for %d days from cache.\n', length(weatherData.dates));
-else
-    % Get weather data from API
-    fprintf('Getting weather data for %d days from API...\n', length(uniqueDays));
-    [precipitationData, averageTemperatureData, minTemperatureData, maxTemperatureData, sunriseData, sunsetData, sunhoursData, snowData, windspeedData, feelslikeData] = ...
-        getWeatherstackData('Montreal', dailyNoonTimes);
-    
-    % Store weather data correctly - extract the actual vectors
-    weatherData = struct();
-    weatherData.dates = uniqueDays;
-    weatherData.precipitation = precipitationData;
-    weatherData.temperature = averageTemperatureData;
-    %weatherData.temperature = maxTemperatureData;
-    weatherData.feelslike = feelslikeData;
-    weatherData.windspeed = windspeedData;
-    weatherData.sunrise = sunriseData;
-    weatherData.sunset = sunsetData;
-    weatherData.sunhours = sunhoursData;
-    weatherData.snow = snowData;
-    
-    % Save to cache
-    fprintf('Saving weather data to cache: %s\n', cacheFilename);
-    save(cacheFilename, 'weatherData');
+if plots.showWeather
+    % Check if cached data exists
+    if exist(cacheFilename, 'file')
+        fprintf('Loading cached weather data from %s...\n', cacheFilename);
+        load(cacheFilename, 'weatherData');
+        fprintf('Loaded weather data for %d days from cache.\n', length(weatherData.dates));
+    else
+        % Get weather data from API
+        fprintf('Getting weather data for %d days from API...\n', length(uniqueDays));
+        [precipitationData, averageTemperatureData, minTemperatureData, maxTemperatureData, sunriseData, sunsetData, sunhoursData, snowData, windspeedData, feelslikeData] = ...
+            getWeatherstackData('Montreal', dailyNoonTimes);
+
+        % Store weather data correctly - extract the actual vectors
+        weatherData = struct();
+        weatherData.dates = uniqueDays;
+        weatherData.precipitation = precipitationData;
+        weatherData.temperature = averageTemperatureData;
+        %weatherData.temperature = maxTemperatureData;
+        weatherData.feelslike = feelslikeData;
+        weatherData.windspeed = windspeedData;
+        weatherData.sunrise = sunriseData;
+        weatherData.sunset = sunsetData;
+        weatherData.sunhours = sunhoursData;
+        weatherData.snow = snowData;
+
+        % Save to cache
+        fprintf('Saving weather data to cache: %s\n', cacheFilename);
+        save(cacheFilename, 'weatherData');
+    end
 end
 
 %% Generate Hourly Raw Count Plots
@@ -200,6 +202,9 @@ plotTemperatureScatterWeekly(locationData, weatherData, analysis, plots, style);
 
 %% Generate Scatter Plot comparing counts at the two locations
 plotLocationCorrelation(locationData, analysis, plots, style, 'daily');
+
+% Generate Bike vs Other Modalities Correlation Plots
+plotBikeModalityCorrelation(locationData, analysis, plots, style);
 
 %% Generate Modality Pie and Bar Charts
 plotModalityPieCharts(locationData, analysis, style);
@@ -497,7 +502,9 @@ function [precipitationValues, averageTemperatureValues, minTemperatureValues, m
     baseURL = 'http://api.weatherstack.com/historical';
     
     % Replace with your actual Weatherstack access key (if needed)
-    accessKey = 'fe2d67122ba14cc9e0b2c931f6105b4b'; % Leave empty if access key is not required
+    %accessKey = 'fe2d67122ba14cc9e0b2c931f6105b4b'; % Leave empty if access key is not required
+    accessKey = '9cbcc044ac6abbe7f78b2fe3e26ed4b9'; % Leave empty if access key is not required
+    
     
     % Iterate over each date in the range
     numDates = length(dates);
@@ -4756,4 +4763,357 @@ function printCorrelationSummary(location1Info, location2Info, corrStats, trendS
     direction = ternary(corrStats.pearsonR > 0, 'positive', 'negative');
     fprintf('Interpretation: %s %s correlation\n', strength, direction);
     fprintf('=====================================\n\n');
+end
+
+%% Bike vs other modalities
+
+function plotBikeModalityCorrelation(locationData, analysis, plots, style)
+    % Plot correlation scatter plots between weekly bike counts and other modalities
+    %
+    % This function creates scatter plots showing the correlation between
+    % weekly bike counts and weekly counts for other transportation modes
+    % (cars and pedestrians) at both monitoring locations.
+    %
+    % Inputs:
+    %   locationData - structure containing data for all locations
+    %   analysis - analysis configuration structure
+    %   plots - plotting configuration structure  
+    %   style - plotting style configuration structure
+    
+    % Define the modalities to compare against bikes
+    comparisonModes = {
+        struct('columnName', 'Car Total', 'displayName', 'Car Counts', 'shortName', 'Cars');
+        struct('columnName', 'Pedestrian Total', 'displayName', 'Pedestrian Counts', 'shortName', 'Pedestrians');
+    };
+    
+    locationNames = fieldnames(locationData);
+    
+    % Create a separate plot for each comparison mode
+    for modeIdx = 1:length(comparisonModes)
+        currentMode = comparisonModes{modeIdx};
+        
+        % Create figure for this mode comparison
+        figure('Position', [408 126 1132 921]);
+        hold on;
+        
+        plotHandles = [];
+        allBikeCounts = [];
+        allModeCounts = [];
+        
+        % Process each location
+        for i = 1:length(locationNames)
+            locationName = locationNames{i};
+            data = locationData.(locationName);
+            locationInfo = data.locationInfo;
+            
+            % Get weekly bike counts and weekly counts for the comparison mode
+            [bikeCounts, modeCounts, weekStarts, validIdx] = prepareWeeklyModalityData(data, analysis, currentMode.columnName);
+            
+            if ~isempty(bikeCounts) && length(bikeCounts) >= 3
+                % Calculate trend line first to get slope for legend
+                locationSlope = NaN; % Default if trend calculation fails
+                if length(bikeCounts) > 3
+                    [trendParams, trendStats] = calculateLocationTrend(modeCounts, bikeCounts);
+                    
+                    if ~isempty(trendParams)
+                        locationSlope = trendParams.slope;
+                        
+                        % Plot trend line
+                        xRange = linspace(min(modeCounts), max(modeCounts), 100);
+                        trendLine = trendParams.slope * xRange + trendParams.intercept;
+                        
+                        plot(xRange, trendLine, '--', ...
+                            'Color', locationInfo.plotColor, ...
+                            'LineWidth', 1.5, ...
+                            'HandleVisibility', 'off');  % Don't show in legend
+                    end
+                end
+                
+                % Create display name with slope if available
+                if ~isnan(locationSlope)
+                    displayName = sprintf('%s (%d weeks, slope = %.3f)', ...
+                        extractLocationShortName(locationInfo.name), length(bikeCounts), locationSlope);
+                else
+                    displayName = sprintf('%s (%d weeks)', ...
+                        extractLocationShortName(locationInfo.name), length(bikeCounts));
+                end
+                
+                % Create scatter plot for this location
+                h = scatter(modeCounts, bikeCounts, 80, ...
+                    'MarkerFaceColor', locationInfo.plotColor, ...
+                    'MarkerEdgeColor', locationInfo.plotColor * 0.7, ...
+                    'MarkerFaceAlpha', 0.6, ...
+                    'MarkerEdgeAlpha', 0.8, ...
+                    'DisplayName', displayName);
+                
+                plotHandles = [plotHandles, h];
+                
+                % Collect data for overall trend analysis
+                allBikeCounts = [allBikeCounts; bikeCounts];
+                allModeCounts = [allModeCounts; modeCounts];
+            end
+        end
+        
+        % Individual location trend lines are already added above
+        % No overall trend line needed since locations have different patterns
+        
+        % Format the plot
+        formatModalityCorrelationPlot(currentMode, analysis, style, allModeCounts, allBikeCounts);
+        
+        % Remove correlation statistics box - slopes are now in legend
+        % addModalityCorrelationStatsBox(corrStats, [], style, length(allBikeCounts), currentMode.shortName);
+        
+        % Add legend
+        if ~isempty(plotHandles)
+            legend(plotHandles, 'Location', 'northwest', 'Color', style.axisBackgroundColor, ...
+                'FontSize', style.legendFontSize);
+        end
+        
+        hold off;
+        
+        % Print summary to console (optional - can be removed if not needed)
+        if ~isempty(allBikeCounts) && length(allBikeCounts) >= 3
+            [corrStats, ~] = calculateCorrelationStats(allModeCounts, allBikeCounts);
+            printModalityCorrelationSummary(currentMode, corrStats, [], length(allBikeCounts));
+        end
+    end
+end
+
+function [bikeCounts, modeCounts, weekStarts, validIdx] = prepareWeeklyModalityData(locationDataStruct, analysis, modeColumnName)
+    % Prepare weekly bike counts and weekly counts for another modality
+    
+    % Extract the data timetable from the structure
+    data = locationDataStruct.data;
+    
+    % Check if the mode column exists
+    if ~ismember(modeColumnName, data.Properties.VariableNames)
+        warning('Mode column "%s" not found in data', modeColumnName);
+        bikeCounts = [];
+        modeCounts = [];
+        weekStarts = [];
+        validIdx = [];
+        return;
+    end
+    
+    % Calculate weekly totals for bikes using existing function
+    bikeAnalysis = analysis;
+    bikeAnalysis.modeString = 'Bike Total';
+    weeklyBikeData = calculateWeeklyTotals(locationDataStruct, bikeAnalysis);
+    
+    % Calculate weekly totals for the comparison mode
+    modeAnalysis = analysis;
+    modeAnalysis.modeString = modeColumnName;
+    weeklyModeData = calculateWeeklyTotals(locationDataStruct, modeAnalysis);
+    
+    % Find common week starts
+    [commonWeeks, ia, ib] = intersect(weeklyBikeData.weekStarts, weeklyModeData.weekStarts);
+    
+    if isempty(commonWeeks)
+        bikeCounts = [];
+        modeCounts = [];
+        weekStarts = [];
+        validIdx = [];
+        return;
+    end
+    
+    % Extract counts for common weeks
+    bikeCounts = weeklyBikeData.rawCounts(ia);
+    modeCounts = weeklyModeData.rawCounts(ib);
+    weekStarts = commonWeeks;
+    
+    % Remove NaN values
+    validIdx = ~isnan(bikeCounts) & ~isnan(modeCounts);
+    bikeCounts = bikeCounts(validIdx);
+    modeCounts = modeCounts(validIdx);
+    weekStarts = weekStarts(validIdx);
+end
+
+function [trendParams, trendStats] = calculateLocationTrend(xData, yData)
+    % Calculate trend line parameters and statistics
+    
+    trendParams = struct();
+    trendStats = struct();
+    
+    if length(xData) < 3
+        trendParams = [];
+        trendStats = [];
+        return;
+    end
+    
+    try
+        % Linear regression
+        p = polyfit(xData, yData, 1);
+        trendParams.slope = p(1);
+        trendParams.intercept = p(2);
+        
+        % Calculate regression statistics
+        yPred = polyval(p, xData);
+        SSres = sum((yData - yPred).^2);
+        SStot = sum((yData - mean(yData)).^2);
+        
+        if SStot > 0
+            trendStats.rSquared = 1 - SSres/SStot;
+        else
+            trendStats.rSquared = 0;
+        end
+        
+        % Standard error of regression
+        if length(xData) > 2
+            trendStats.standardError = sqrt(SSres / (length(xData) - 2));
+        else
+            trendStats.standardError = 0;
+        end
+        
+        % Calculate correlation coefficient
+        trendStats.correlation = corr(xData, yData);
+        
+    catch ME
+        warning('Error calculating trend: %s', ME.message);
+        trendParams = [];
+        trendStats = [];
+    end
+end
+
+function formatModalityCorrelationPlot(currentMode, analysis, style, modeCounts, bikeCounts)
+    % Format the modality correlation scatter plot
+    
+    xlabel(['Weekly ' currentMode.displayName], ...
+        'FontSize', style.labelFontSize, 'FontWeight', 'bold');
+    ylabel('Weekly Bike Counts', ...
+        'FontSize', style.labelFontSize, 'FontWeight', 'bold');
+    
+    title(sprintf('Weekly Bike Counts vs %s', currentMode.displayName), ...
+        'FontSize', style.titleFontSize);
+    
+    % Add subtitle with date range
+    subtitle(sprintf('%s to %s', ...
+        datestr(analysis.startTime, 'mmm dd, yyyy'), ...
+        datestr(analysis.endTime, 'mmm dd, yyyy')), ...
+        'FontSize', style.axisFontSize, 'Color', [0.3 0.3 0.3]);
+    
+    set(gca, 'Color', style.axisBackgroundColor);
+    set(gca, 'FontSize', style.axisFontSize);
+    grid on;
+    
+    % Format both axes with separators
+    if ~isempty(modeCounts)
+        xtick_positions = xticks;
+        xtick_labels = arrayfun(@(v) num2sepstr(v, '%.0f'), xtick_positions, 'UniformOutput', false);
+        xticklabels(xtick_labels);
+    end
+    
+    if ~isempty(bikeCounts)
+        ytick_positions = yticks;
+        ytick_labels = arrayfun(@(v) num2sepstr(v, '%.0f'), ytick_positions, 'UniformOutput', false);
+        yticklabels(ytick_labels);
+    end
+    
+    % Ensure both axes start at 0
+    if ~isempty(modeCounts) && ~isempty(bikeCounts)
+        xlim([0 max(xlim) * 1.05]);
+        ylim([0 max(ylim) * 1.05]);
+    end
+end
+
+function addModalityCorrelationStatsBox(corrStats, trendStats, style, nPoints, modeName)
+    % Add a text box with correlation statistics
+    
+    statsText = {};
+    statsText{end+1} = sprintf('Sample Size: %d weeks', nPoints);
+    statsText{end+1} = sprintf('Pearson r: %.3f', corrStats.pearsonR);
+    statsText{end+1} = sprintf('R²: %.3f', corrStats.rSquared);
+    statsText{end+1} = sprintf('Spearman ρ: %.3f', corrStats.spearmanRho);
+    
+    if corrStats.pearsonP < 0.001
+        statsText{end+1} = 'p < 0.001';
+    else
+        statsText{end+1} = sprintf('p = %.3f', corrStats.pearsonP);
+    end
+    
+    if ~isempty(trendStats) && isfield(trendStats, 'slope') && isfield(trendStats, 'intercept')
+        statsText{end+1} = sprintf('Slope: %.3f', trendStats.slope);
+        if abs(trendStats.intercept) < 1
+            statsText{end+1} = sprintf('Intercept: %.2f', trendStats.intercept);
+        else
+            statsText{end+1} = sprintf('Intercept: %.1f', trendStats.intercept);
+        end
+    end
+    
+    % Add interpretation
+    absR = abs(corrStats.pearsonR);
+    if absR >= 0.7
+        interpretation = 'Strong';
+    elseif absR >= 0.5
+        interpretation = 'Moderate';
+    elseif absR >= 0.3
+        interpretation = 'Weak';
+    else
+        interpretation = 'Very weak';
+    end
+    
+    direction = ternary(corrStats.pearsonR > 0, 'positive', 'negative');
+    statsText{end+1} = sprintf('%s %s correlation', interpretation, direction);
+    
+    % Position text box in upper left
+    xLimits = xlim;
+    yLimits = ylim;
+    
+    textX = xLimits(1) + 0.05 * (xLimits(2) - xLimits(1));
+    textY = yLimits(2) - 0.05 * (yLimits(2) - yLimits(1));
+    
+    % Create text box
+    textStr = strjoin(statsText, '\n');
+    text(textX, textY, textStr, ...
+        'FontSize', style.axisFontSize * 0.9, ...
+        'VerticalAlignment', 'top', ...
+        'BackgroundColor', [1 1 1 0.9], ...
+        'EdgeColor', [0.7 0.7 0.7], ...
+        'Margin', 5);
+end
+
+function printModalityCorrelationSummary(currentMode, corrStats, trendStats, nPoints)
+    % Print correlation summary to console
+    
+    fprintf('\n=== Weekly Bike vs %s Correlation Analysis ===\n', currentMode.shortName);
+    fprintf('Sample Size: %d weeks\n', nPoints);
+    fprintf('Pearson Correlation: r = %.3f (R² = %.3f)\n', corrStats.pearsonR, corrStats.rSquared);
+    fprintf('Spearman Correlation: ρ = %.3f\n', corrStats.spearmanRho);
+    
+    if corrStats.pearsonP < 0.001
+        fprintf('Statistical Significance: p < 0.001\n');
+    else
+        fprintf('Statistical Significance: p = %.3f\n', corrStats.pearsonP);
+    end
+    
+    if ~isempty(trendStats) && isfield(trendStats, 'slope') && isfield(trendStats, 'intercept')
+        fprintf('Linear Trend: bikes = %.3f × %s + %.1f\n', ...
+            trendStats.slope, lower(currentMode.shortName), trendStats.intercept);
+        if isfield(trendStats, 'standardError')
+            fprintf('Standard Error: %.2f\n', trendStats.standardError);
+        end
+    end
+    
+    % Interpret correlation strength
+    absR = abs(corrStats.pearsonR);
+    if absR >= 0.7
+        strength = 'strong';
+    elseif absR >= 0.5
+        strength = 'moderate';
+    elseif absR >= 0.3
+        strength = 'weak';
+    else
+        strength = 'very weak';
+    end
+    
+    direction = ternary(corrStats.pearsonR > 0, 'positive', 'negative');
+    fprintf('Interpretation: %s %s correlation\n', strength, direction);
+    
+    % Provide practical interpretation
+    if strcmp(currentMode.shortName, 'Cars') && corrStats.pearsonR > 0.3
+        fprintf('Practical meaning: Higher car traffic tends to coincide with higher bike traffic\n');
+    elseif strcmp(currentMode.shortName, 'Pedestrians') && corrStats.pearsonR > 0.3
+        fprintf('Practical meaning: Higher pedestrian activity tends to coincide with higher bike activity\n');
+    end
+    
+    fprintf('=================================================\n\n');
 end
