@@ -145,7 +145,7 @@ if plots.showWeather
     else
         % Get weather data from API
         fprintf('Getting weather data for %d days from API...\n', length(uniqueDays));
-        [precipitationData, averageTemperatureData, minTemperatureData, maxTemperatureData, sunriseData, sunsetData, sunhoursData, snowData, windspeedData, feelslikeData] = ...
+        [precipitationData, averageTemperatureData, minTemperatureData, maxTemperatureData, sunriseData, sunsetData, sunhoursData, snowData, windspeedData, feelslikeData, visibilityData] = ...
             getWeatherstackData('Montreal', dailyNoonTimes);
 
         % Store weather data correctly - extract the actual vectors
@@ -155,6 +155,7 @@ if plots.showWeather
         weatherData.temperature = averageTemperatureData;
         %weatherData.temperature = maxTemperatureData;
         weatherData.feelslike = feelslikeData;
+        weatherData.visibility = visibilityData;
         weatherData.windspeed = windspeedData;
         weatherData.sunrise = sunriseData;
         weatherData.sunset = sunsetData;
@@ -497,7 +498,7 @@ function formatCombinedPlot(analysis, plots, style, weatherData)
 end
 
 % Keep your existing utility functions
-function [precipitationValues, averageTemperatureValues, minTemperatureValues, maxTemperatureValues, sunriseValues, sunsetValues, sunhoursValues, snowValues, windspeedValues, feelslikeValues] = getWeatherstackData(location, dates)
+function [precipitationValues, averageTemperatureValues, minTemperatureValues, maxTemperatureValues, sunriseValues, sunsetValues, sunhoursValues, snowValues, windspeedValues, feelslikeValues, visibilityValues] = getWeatherstackData(location, dates)
     % Define the base URL for Weatherstack API
     baseURL = 'http://api.weatherstack.com/historical';
     
@@ -511,6 +512,7 @@ function [precipitationValues, averageTemperatureValues, minTemperatureValues, m
     precipitationValues = [];
     windspeedValues = [];
     feelslikeValues = [];
+    visibilityValues = [];
     snowValues = [];
     averageTemperatureValues = [];
     minTemperatureValues = [];
@@ -533,6 +535,7 @@ function [precipitationValues, averageTemperatureValues, minTemperatureValues, m
         precipitation = response.historical.(['x' strrep(dateStr,'-','_')]).hourly.precip;
         windspeed = response.historical.(['x' strrep(dateStr,'-','_')]).hourly.wind_speed;
         feelslike = response.historical.(['x' strrep(dateStr,'-','_')]).hourly.feelslike;
+        visibility = response.historical.(['x' strrep(dateStr,'-','_')]).hourly.visibility;
         temperature = response.historical.(['x' strrep(dateStr,'-','_')]).hourly.temperature;
         avgtemp = response.historical.(['x' strrep(dateStr,'-','_')]).avgtemp;
         mintemp = response.historical.(['x' strrep(dateStr,'-','_')]).mintemp;
@@ -545,6 +548,7 @@ function [precipitationValues, averageTemperatureValues, minTemperatureValues, m
         precipitationValues(ix) = precipitation;
         windspeedValues(ix) = windspeed;
         feelslikeValues(ix) = feelslike;
+        visibilityValues(ix) = visibility;
         averageTemperatureValues(ix) = avgtemp;
         minTemperatureValues(ix) = mintemp;
         maxTemperatureValues(ix) = maxtemp;
@@ -559,6 +563,7 @@ function [precipitationValues, averageTemperatureValues, minTemperatureValues, m
     precipitationValues = precipitationValues.';
     windspeedValues = windspeedValues.';
     feelslikeValues = feelslikeValues.';
+    visibilityValues = visibilityValues.';
     snowValues = snowValues.';
     averageTemperatureValues = averageTemperatureValues.';
     minTemperatureValues = minTemperatureValues.';
