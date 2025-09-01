@@ -24,9 +24,9 @@ locations = {
 
 % Analysis parameters
 
-%modeString = 'Bike Total'; modeDisplayString = 'Bike Counts';
+modeString = 'Bike Total'; modeDisplayString = 'Bike Counts';
 %modeString = 'Pedestrian Total'; modeDisplayString = 'Pedestrian Counts';
-modeString = 'Car Total'; modeDisplayString = 'Car Counts';
+%modeString = 'Car Total'; modeDisplayString = 'Car Counts';
 %modeString = 'Large vehicle Total'; modeDisplayString = 'Heavy Truck Counts';
 
 analysis = struct( ...
@@ -5448,13 +5448,82 @@ function performMultivariateWeatherAnalysis(locationData, weatherData, analysis,
         allResults{end+1} = regressionResults;
         allLocationInfo{end+1} = locationInfo;
         
-        % Perform visibility-specific analysis
-        performVisibilityDegradationAnalysis(weeklyData, isValid, locationInfo.name);
+        % Perform precipitation-temperature interaction analysis
+        performPrecipitationTemperatureInteractionAnalysis(weeklyData, isValid, locationInfo.name);
     end
     
     % Create combined visualization if we have results for multiple locations
     if length(allResults) > 1
         plotCombinedVariableImportance(allResults, allLocationInfo, analysis, style);
+    end
+end
+
+function performPrecipitationTemperatureInteractionAnalysis(weeklyData, isValid, locationName)
+    % Analyze precipitation-temperature interaction effects
+    
+    fprintf('\n--- Precipitation-Temperature Interaction Analysis ---\n');
+    
+    % Define temperature bins
+    tempBins = [-inf, 0, 10, 20, inf]; % Below freezing, Cold, Mild, Warm
+    tempBinLabels = {'Below 0°C', '0-10°C', '10-20°C', 'Above 20°C'};
+    
+    validData = struct();
+    fields = fieldnames(weeklyData);
+    for i = 1:length(fields)
+        if isfield(weeklyData, fields{i})
+            validData.(fields{i}) = weeklyData.(fields{i})(isValid);
+        end
+    end
+    
+    % Analyze effect of precipitation at different temperatures
+    fprintf('Precipitation effect by temperature category:\n');
+    fprintf('%-20s %8s %12s %12s %12s\n', 'Temperature', 'N', 'Corr(P,C)', 'p-value', 'Mean Precip');
+    fprintf('%s\n', repmat('-', 1, 70));
+    
+    for i = 1:length(tempBins)-1
+        inBin = validData.temperature >= tempBins(i) & validData.temperature < tempBins(i+1);
+        
+        if sum(inBin) > 5  % Need at least 5 observations
+            binPrecip = validData.precipitation(inBin);
+            binCounts = validData.counts(inBin);
+            
+            % Calculate correlation between precipitation and counts in this temp bin
+            [r, p] = corr(binPrecip, binCounts, 'type', 'Spearman');
+            meanPrecip = mean(binPrecip);
+            
+            fprintf('%-20s %8d %12.3f %12.3f %12.1f\n', ...
+                tempBinLabels{i}, sum(inBin), r, p, meanPrecip);
+        end
+    end
+    
+    % Analyze interaction term directly
+    fprintf('\nInteraction term analysis:\n');
+    
+    % Split data by precipitation level
+    dryWeeks = validData.precipitation < 5;  % Less than 5mm total weekly precip
+    wetWeeks = ~dryWeeks;
+    
+    if sum(dryWeeks) > 10 && sum(wetWeeks) > 10
+        % Temperature effect during dry weeks
+        [r_dry, p_dry] = corr(validData.temperature(dryWeeks), validData.counts(dryWeeks));
+        fprintf('Temperature effect during dry weeks (n=%d): r = %.3f, p = %.3f\n', ...
+            sum(dryWeeks), r_dry, p_dry);
+        
+        % Temperature effect during wet weeks
+        [r_wet, p_wet] = corr(validData.temperature(wetWeeks), validData.counts(wetWeeks));
+        fprintf('Temperature effect during wet weeks (n=%d): r = %.3f, p = %.3f\n', ...
+            sum(wetWeeks), r_wet, p_wet);
+        
+        % Test if correlations are significantly different
+        z_diff = (atanh(r_dry) - atanh(r_wet)) / sqrt(1/(sum(dryWeeks)-3) + 1/(sum(wetWeeks)-3));
+        p_diff = 2 * (1 - normcdf(abs(z_diff)));
+        fprintf('Difference in correlations: z = %.3f, p = %.3f\n', z_diff, p_diff);
+    end
+    
+    % Visualize interaction if significant
+    if isfield(validData, 'precipTempInteraction')
+        [r_int, p_int] = corr(validData.precipTempInteraction, validData.counts);
+        fprintf('\nDirect interaction term correlation: r = %.3f, p = %.3f\n', r_int, p_int);
     end
 end
 
@@ -5476,10 +5545,11 @@ function [weeklyData, isValid] = prepareMultivariateData(locationDataStruct, wea
     weeklyData.counts = weeklyTraffic.rawCounts(ia);
     weeklyData.temperature = weeklyWeather.avgTemperature(ib);
     weeklyData.precipitation = weeklyWeather.totalPrecipitation(ib);
-    weeklyData.visibility = weeklyWeather.avgVisibility(ib);
     weeklyData.windspeed = weeklyWeather.avgWindspeed(ib);
-    weeklyData.snow = weeklyWeather.totalSnow(ib);
     weeklyData.sunhours = weeklyWeather.avgSunhours(ib);
+    
+    % Add interaction term: precipitation × temperature
+    weeklyData.precipTempInteraction = weeklyData.precipitation .* weeklyData.temperature;
     
     % Add derived variables
     weeklyData.weekOfYear = week(weeklyData.dates);
@@ -5495,33 +5565,30 @@ function [weeklyData, isValid] = prepareMultivariateData(locationDataStruct, wea
     
     % Remove rows with any NaN values
     isValid = ~any(isnan([weeklyData.counts, weeklyData.temperature, ...
-                         weeklyData.visibility, weeklyData.windspeed]), 2);
+                         weeklyData.precipitation, weeklyData.windspeed]), 2);
 end
 
 function weeklyWeather = aggregateAllWeatherVariables(weatherData)
     % Aggregate all weather variables to weekly
     
     tempTable = table(weatherData.dates, weatherData.temperature, ...
-        weatherData.precipitation, weatherData.visibility, ...
-        weatherData.windspeed, weatherData.snow, weatherData.sunhours, ...
+        weatherData.precipitation, weatherData.windspeed, weatherData.sunhours, ...
         'VariableNames', {'dates', 'temperature', 'precipitation', ...
-        'visibility', 'windspeed', 'snow', 'sunhours'});
+        'windspeed', 'sunhours'});
     
     % Add week start dates
     tempTable.weekStarts = dateshift(dateshift(tempTable.dates,'dayofweek','Monday','previous'),'start','day');
     
     % Group by week - using appropriate aggregation for each variable
     weeklyGrouped = groupsummary(tempTable, 'weekStarts', ...
-        {'mean', 'sum', 'mean', 'mean', 'sum', 'mean'}, ...
-        {'temperature', 'precipitation', 'visibility', 'windspeed', 'snow', 'sunhours'});
+        {'mean', 'sum', 'mean', 'mean'}, ...
+        {'temperature', 'precipitation', 'windspeed', 'sunhours'});
     
     weeklyWeather = struct();
     weeklyWeather.weekStarts = weeklyGrouped.weekStarts;
     weeklyWeather.avgTemperature = weeklyGrouped.mean_temperature;
     weeklyWeather.totalPrecipitation = weeklyGrouped.sum_precipitation;
-    weeklyWeather.avgVisibility = weeklyGrouped.mean_visibility;
     weeklyWeather.avgWindspeed = weeklyGrouped.mean_windspeed;
-    weeklyWeather.totalSnow = weeklyGrouped.sum_snow;
     weeklyWeather.avgSunhours = weeklyGrouped.mean_sunhours;
 end
 
@@ -5531,11 +5598,10 @@ function results = performRegressionAnalysis(weeklyData, isValid)
     % Prepare predictor matrix
     X = [weeklyData.temperature(isValid), ...
          weeklyData.precipitation(isValid), ...
-         weeklyData.visibility(isValid), ...
          weeklyData.windspeed(isValid), ...
-         weeklyData.snow(isValid), ...
          weeklyData.sunhours(isValid), ...
-         weeklyData.daylightHours(isValid)];
+         weeklyData.daylightHours(isValid), ...
+         weeklyData.precipTempInteraction(isValid)];
     
     y = weeklyData.counts(isValid);
     
@@ -5552,7 +5618,7 @@ function results = performRegressionAnalysis(weeklyData, isValid)
     results = struct();
     results.coefficients = b;
     results.coefficientNames = {'Intercept', 'Temperature', 'Precipitation', ...
-        'Visibility', 'Windspeed', 'Snow', 'Sunhours', 'DaylightHours'};
+        'Windspeed', 'Sunhours', 'DaylightHours', 'Precip×Temp'};
     results.standardizedCoefficients = b(2:end); % Excluding intercept
     results.pValues = stats(3);
     results.rSquared = stats(1);
