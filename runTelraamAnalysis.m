@@ -24,9 +24,9 @@ locations = {
 
 % Analysis parameters
 
-modeString = 'Bike Total'; modeDisplayString = 'Bike Counts';
+%modeString = 'Bike Total'; modeDisplayString = 'Bike Counts';
 %modeString = 'Pedestrian Total'; modeDisplayString = 'Pedestrian Counts';
-%modeString = 'Car Total'; modeDisplayString = 'Car Counts';
+modeString = 'Car Total'; modeDisplayString = 'Car Counts';
 %modeString = 'Large vehicle Total'; modeDisplayString = 'Heavy Truck Counts';
 
 analysis = struct( ...
@@ -200,6 +200,9 @@ plotHourlyPatterns(locationData, analysis, plots, style);
 %% Generate Temperature Scatter Plot
 plotTemperatureScatterWeekly(locationData, weatherData, analysis, plots, style);
 %plotTemperatureScatterSeasonal(locationData, weatherData, analysis, plots, style);
+
+%% Generate Visibility Scatter Plot
+plotVisibilityScatterWeekly(locationData, weatherData, analysis, plots, style);
 
 %% Generate Scatter Plot comparing counts at the two locations
 plotLocationCorrelation(locationData, analysis, plots, style, 'daily');
@@ -5141,4 +5144,261 @@ function printModalityCorrelationSummary(currentMode, corrStats, trendStats, nPo
     end
     
     fprintf('=================================================\n\n');
+end
+
+function plotVisibilityScatterWeekly(locationData, weatherData, analysis, plots, style)
+    % Plot scatter plot of weekly counts versus average weekly visibility for all locations
+    % This is the weekly equivalent of plotTemperatureScatterWeekly() but for visibility
+    
+    figure('Position', [408 126 1132 921]);
+    hold on
+    
+    locationNames = fieldnames(locationData);
+    plotHandles = [];
+    
+    % Plot each location with different colors
+    for i = 1:length(locationNames)
+        locationName = locationNames{i};
+        data = locationData.(locationName);
+        locationInfo = data.locationInfo;
+        
+        % Calculate weekly totals and match with weather data
+        [weeklyCounts, weeklyVisibility, validWeekStarts] = prepareWeeklyVisibilityData(data, weatherData, analysis);
+        
+        if ~isempty(weeklyCounts)
+            % Create scatter plot
+            h = scatter(weeklyVisibility, weeklyCounts, 80, ...
+                'MarkerEdgeColor', locationInfo.plotColor, ...
+                'MarkerFaceColor', locationInfo.plotColor, ...
+                'MarkerFaceAlpha', 0.6, ...
+                'MarkerEdgeAlpha', 0.8, ...
+                'DisplayName', sprintf('%s (%d weeks)', locationInfo.name, length(weeklyCounts)));
+            plotHandles = [plotHandles, h];
+            
+            % Add simple linear trend line (no breakpoint needed for visibility)
+            if length(weeklyVisibility) > 5
+                [trendParams, trendStats] = fitLinearTrend(weeklyVisibility, weeklyCounts);
+                
+                if ~isempty(trendParams)
+                    % Plot the linear trend
+                    visRange = linspace(min(weeklyVisibility), max(weeklyVisibility), 100);
+                    trendLine = trendParams.slope * visRange + trendParams.intercept;
+                    
+                    plot(visRange, trendLine, '-', ...
+                        'Color', locationInfo.plotColor, ...
+                        'LineWidth', 2, ...
+                        'HandleVisibility', 'off');  % Don't show in legend
+                    
+                    % Store trend stats for later display
+                    locationInfo.trendStats = trendStats;
+                end
+            end
+        end
+    end
+    
+    % Format plot
+    formatWeeklyVisibilityScatterPlot(analysis, style);
+    
+    % Add correlation statistics
+    addWeeklyVisibilityCorrelationStats(locationData, weatherData, analysis, style);
+    
+    % Add legend
+    if ~isempty(plotHandles)
+        legend(plotHandles, 'Location', 'northeast', 'Color', style.axisBackgroundColor, ...
+            'FontSize', style.legendFontSize);
+    end
+    
+    hold off
+end
+
+function [weeklyCounts, weeklyVisibility, validWeekStarts] = prepareWeeklyVisibilityData(locationDataStruct, weatherData, analysis)
+    % Prepare matched weekly counts and visibility data
+    
+    % Extract the data timetable from the structure
+    data = locationDataStruct.data;
+    
+    % Calculate weekly totals using the existing yearWeekKey approach
+    groupedData = groupsummary(data, 'yearWeekKey', 'sum', analysis.modeString);
+    
+    % Get week start dates for each yearWeekKey
+    weekStartGrouped = groupsummary(data, 'yearWeekKey', 'min', 'weekStartDateTimes');
+    
+    % Create weekly data table
+    sumColumnName = ['sum_' analysis.modeString];
+    weeklyData = table(weekStartGrouped.min_weekStartDateTimes, ...
+        groupedData.(sumColumnName), ...
+        'VariableNames', {'WeekStart', 'Count'});
+    
+    % Match indices between weekly data and week starts
+    [~, ia, ib] = intersect(groupedData.yearWeekKey, weekStartGrouped.yearWeekKey);
+    weeklyData = weeklyData(ib, :);  % Align the data properly
+    
+    % Aggregate weather data to weekly averages
+    weeklyWeatherData = aggregateWeatherToWeeklyWithVisibility(weatherData);
+    
+    % Match weekly counts with weekly weather data
+    [~, ic, id] = intersect(weeklyData.WeekStart, weeklyWeatherData.weekStarts);
+    
+    if isempty(ic)
+        % No matching weeks
+        weeklyCounts = [];
+        weeklyVisibility = [];
+        validWeekStarts = [];
+        return;
+    end
+    
+    % Extract matched data
+    weeklyCounts = weeklyData.Count(ic);
+    weeklyVisibility = weeklyWeatherData.avgVisibility(id);
+    validWeekStarts = weeklyData.WeekStart(ic);
+    
+    % Remove any NaN values
+    validIdx = ~isnan(weeklyCounts) & ~isnan(weeklyVisibility);
+    weeklyCounts = weeklyCounts(validIdx);
+    weeklyVisibility = weeklyVisibility(validIdx);
+    validWeekStarts = validWeekStarts(validIdx);
+end
+
+function weeklyWeatherData = aggregateWeatherToWeeklyWithVisibility(weatherData)
+    % Create week grouping for weather data including visibility
+    tempTable = table(weatherData.dates, weatherData.temperature, weatherData.precipitation, weatherData.visibility, ...
+        'VariableNames', {'dates', 'temperature', 'precipitation', 'visibility'});
+    
+    % Add week start dates
+    tempTable.weekStarts = dateshift(dateshift(tempTable.dates,'dayofweek','Monday','previous'),'start','day');
+    
+    % Group by week
+    weeklyGrouped = groupsummary(tempTable, 'weekStarts', {'mean', 'sum'}, {'temperature', 'precipitation', 'visibility'});
+    
+    weeklyWeatherData = struct();
+    weeklyWeatherData.weekStarts = weeklyGrouped.weekStarts;
+    weeklyWeatherData.avgTemperature = weeklyGrouped.mean_temperature;
+    weeklyWeatherData.totalPrecipitation = weeklyGrouped.sum_precipitation;
+    weeklyWeatherData.avgVisibility = weeklyGrouped.mean_visibility;
+end
+
+function [trendParams, trendStats] = fitLinearTrend(xData, yData)
+    % Fit simple linear model (no breakpoint needed for visibility)
+    
+    try
+        % Linear fit: y = a*x + b
+        p = polyfit(xData, yData, 1);
+        
+        % Store parameters
+        trendParams = struct();
+        trendParams.slope = p(1);
+        trendParams.intercept = p(2);
+        
+        % Calculate goodness of fit
+        predictedCounts = polyval(p, xData);
+        
+        % Calculate R-squared
+        SSres = sum((yData - predictedCounts).^2);
+        SStot = sum((yData - mean(yData)).^2);
+        rSquared = 1 - SSres/SStot;
+        
+        % Store statistics
+        trendStats = struct();
+        trendStats.slope = p(1);
+        trendStats.intercept = p(2);
+        trendStats.rSquared = rSquared;
+        trendStats.nPoints = length(xData);
+        
+    catch ME
+        fprintf('Error fitting linear model: %s\n', ME.message);
+        trendParams = [];
+        trendStats = [];
+    end
+end
+
+function formatWeeklyVisibilityScatterPlot(analysis, style)
+    % Format the weekly visibility scatter plot
+    
+    xlabel('Average Weekly Visibility (km)', 'FontSize', style.labelFontSize, 'FontWeight', 'bold');
+    ylabel(['Weekly ' analysis.modeDisplayString], 'FontSize', style.labelFontSize, 'FontWeight', 'bold');
+    
+    title(['Weekly ' analysis.modeDisplayString ' vs Average Weekly Visibility'], ...
+        'FontSize', style.titleFontSize);
+    
+    set(gca, 'Color', style.axisBackgroundColor);
+    set(gca, 'FontSize', style.axisFontSize);
+    grid on;
+    
+    % Format y-axis with separators
+    ytick_positions = yticks;
+    ytick_labels = arrayfun(@(v) num2sepstr(v, '%.0f'), ytick_positions, 'UniformOutput', false);
+    yticklabels(ytick_labels);
+    
+    % Ensure y-axis starts at 0
+    ylim([0 max(ylim) * 1.05]);
+    
+    % Add visibility reference lines (optional)
+    xLimits = xlim;
+    
+    % Add vertical lines for key visibility levels
+    % Poor visibility: < 1 km
+    % Moderate visibility: 1-5 km  
+    % Good visibility: 5-10 km
+    % Excellent visibility: > 10 km
+    line([1 1], ylim, 'Color', [0.7 0.7 0.7], 'LineStyle', ':', 'LineWidth', 1, 'HandleVisibility', 'off');
+    line([5 5], ylim, 'Color', [0.7 0.7 0.7], 'LineStyle', ':', 'LineWidth', 1, 'HandleVisibility', 'off');
+    line([10 10], ylim, 'Color', [0.7 0.7 0.7], 'LineStyle', ':', 'LineWidth', 1, 'HandleVisibility', 'off');
+    
+    % Add visibility labels
+    text(1, max(ylim) * 0.95, 'Poor', 'HorizontalAlignment', 'center', 'FontSize', style.axisFontSize * 0.8, 'Color', [0.6 0.6 0.6]);
+    text(5, max(ylim) * 0.95, 'Moderate', 'HorizontalAlignment', 'center', 'FontSize', style.axisFontSize * 0.8, 'Color', [0.6 0.6 0.6]);
+    text(10, max(ylim) * 0.95, 'Good', 'HorizontalAlignment', 'center', 'FontSize', style.axisFontSize * 0.8, 'Color', [0.6 0.6 0.6]);
+end
+
+function addWeeklyVisibilityCorrelationStats(locationData, weatherData, analysis, style)
+    % Add linear model statistics as text annotation for weekly visibility data
+    
+    locationNames = fieldnames(locationData);
+    statsText = {};
+    
+    for i = 1:length(locationNames)
+        locationName = locationNames{i};
+        data = locationData.(locationName);
+        locationInfo = data.locationInfo;
+        
+        % Get weekly data for analysis
+        [weeklyCounts, weeklyVisibility, ~] = prepareWeeklyVisibilityData(data, weatherData, analysis);
+        
+        if length(weeklyCounts) > 5
+            % Fit linear model
+            [trendParams, trendStats] = fitLinearTrend(weeklyVisibility, weeklyCounts);
+            
+            if ~isempty(trendParams)
+                % Format statistics for display
+                slopeStr = sprintf('slope=%.1f', trendStats.slope);
+                rSquared = sprintf('R²=%.3f', trendStats.rSquared);
+                
+                statsText{end+1} = sprintf('%s: %s, %s', ...
+                    locationInfo.name, slopeStr, rSquared);
+            else
+                % Fallback to simple correlation
+                corrCoeff = corr(weeklyVisibility, weeklyCounts, 'type', 'Pearson');
+                statsText{end+1} = sprintf('%s: r = %.3f', locationInfo.name, corrCoeff);
+            end
+        end
+    end
+    
+    % Display statistics
+    if ~isempty(statsText)
+        % Position text box in upper left
+        xLimits = xlim;
+        yLimits = ylim;
+        
+        textX = xLimits(1) + 0.05 * (xLimits(2) - xLimits(1));
+        textY = yLimits(2) - 0.1 * (yLimits(2) - yLimits(1));
+        
+        % Create text box
+        textStr = strjoin(statsText, '\n');
+        text(textX, textY, textStr, ...
+            'FontSize', style.axisFontSize * 0.9, ...
+            'VerticalAlignment', 'top', ...
+            'BackgroundColor', [1 1 1 0.9], ...
+            'EdgeColor', [0.7 0.7 0.7], ...
+            'Margin', 5);
+    end
 end
