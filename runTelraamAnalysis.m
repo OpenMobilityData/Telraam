@@ -202,7 +202,10 @@ plotTemperatureScatterWeekly(locationData, weatherData, analysis, plots, style);
 %plotTemperatureScatterSeasonal(locationData, weatherData, analysis, plots, style);
 
 %% Generate Visibility Scatter Plot
-plotVisibilityScatterWeekly(locationData, weatherData, analysis, plots, style);
+%plotVisibilityScatterWeekly(locationData, weatherData, analysis, plots, style);
+
+%% Multivariate Weather Analysis
+performMultivariateWeatherAnalysis(locationData, weatherData, analysis, style);
 
 %% Generate Scatter Plot comparing counts at the two locations
 plotLocationCorrelation(locationData, analysis, plots, style, 'daily');
@@ -5400,5 +5403,397 @@ function addWeeklyVisibilityCorrelationStats(locationData, weatherData, analysis
             'BackgroundColor', [1 1 1 0.9], ...
             'EdgeColor', [0.7 0.7 0.7], ...
             'Margin', 5);
+    end
+end
+
+%% ======================== MULTIVARIATE WEATHER ANALYSIS FUNCTIONS ========================
+
+function performMultivariateWeatherAnalysis(locationData, weatherData, analysis, style)
+    % Perform multivariate analysis of weather effects on traffic counts
+    
+    fprintf('\n=== Multivariate Weather Analysis for %s ===\n', analysis.modeDisplayString);
+    
+    locationNames = fieldnames(locationData);
+    
+    % Store results for all locations
+    allResults = {};
+    allLocationInfo = {};
+    
+    for i = 1:length(locationNames)
+        locationName = locationNames{i};
+        data = locationData.(locationName);
+        locationInfo = data.locationInfo;
+        
+        fprintf('\nLocation: %s\n', locationInfo.name);
+        fprintf('%s\n', repmat('=', 1, 50));
+        
+        % Prepare data for analysis
+        [weeklyData, isValid] = prepareMultivariateData(data, weatherData, analysis);
+        
+        if sum(isValid) < 20
+            fprintf('Insufficient data for analysis (n=%d)\n', sum(isValid));
+            continue;
+        end
+        
+        % Perform multiple regression analysis
+        regressionResults = performRegressionAnalysis(weeklyData, isValid);
+        
+        % Display results
+        displayRegressionResults(regressionResults, locationInfo.name);
+        
+        % Create individual plot for this location
+        plotVariableImportanceSingle(regressionResults, locationInfo, analysis, style);
+        
+        % Store results for combined plot
+        allResults{end+1} = regressionResults;
+        allLocationInfo{end+1} = locationInfo;
+        
+        % Perform visibility-specific analysis
+        performVisibilityDegradationAnalysis(weeklyData, isValid, locationInfo.name);
+    end
+    
+    % Create combined visualization if we have results for multiple locations
+    if length(allResults) > 1
+        plotCombinedVariableImportance(allResults, allLocationInfo, analysis, style);
+    end
+end
+
+function [weeklyData, isValid] = prepareMultivariateData(locationDataStruct, weatherData, analysis)
+    % Prepare weekly aggregated data with all weather variables
+    
+    % Get weekly traffic counts
+    weeklyTraffic = calculateWeeklyTotals(locationDataStruct, analysis);
+    
+    % Aggregate weather data to weekly
+    weeklyWeather = aggregateAllWeatherVariables(weatherData);
+    
+    % Match weekly traffic with weather data
+    [commonWeeks, ia, ib] = intersect(weeklyTraffic.weekStarts, weeklyWeather.weekStarts);
+    
+    % Initialize output structure
+    weeklyData = struct();
+    weeklyData.dates = commonWeeks;
+    weeklyData.counts = weeklyTraffic.rawCounts(ia);
+    weeklyData.temperature = weeklyWeather.avgTemperature(ib);
+    weeklyData.precipitation = weeklyWeather.totalPrecipitation(ib);
+    weeklyData.visibility = weeklyWeather.avgVisibility(ib);
+    weeklyData.windspeed = weeklyWeather.avgWindspeed(ib);
+    weeklyData.snow = weeklyWeather.totalSnow(ib);
+    weeklyData.sunhours = weeklyWeather.avgSunhours(ib);
+    
+    % Add derived variables
+    weeklyData.weekOfYear = week(weeklyData.dates);
+    weeklyData.monthOfYear = month(weeklyData.dates);
+    
+    % Calculate daylight hours (approximate based on sunrise/sunset)
+    if isfield(weeklyWeather, 'avgDaylightHours')
+        weeklyData.daylightHours = weeklyWeather.avgDaylightHours(ib);
+    else
+        % Approximate daylight hours based on month (for Montreal)
+        weeklyData.daylightHours = 9 + 6 * sin((weeklyData.monthOfYear - 3) * pi / 6);
+    end
+    
+    % Remove rows with any NaN values
+    isValid = ~any(isnan([weeklyData.counts, weeklyData.temperature, ...
+                         weeklyData.visibility, weeklyData.windspeed]), 2);
+end
+
+function weeklyWeather = aggregateAllWeatherVariables(weatherData)
+    % Aggregate all weather variables to weekly
+    
+    tempTable = table(weatherData.dates, weatherData.temperature, ...
+        weatherData.precipitation, weatherData.visibility, ...
+        weatherData.windspeed, weatherData.snow, weatherData.sunhours, ...
+        'VariableNames', {'dates', 'temperature', 'precipitation', ...
+        'visibility', 'windspeed', 'snow', 'sunhours'});
+    
+    % Add week start dates
+    tempTable.weekStarts = dateshift(dateshift(tempTable.dates,'dayofweek','Monday','previous'),'start','day');
+    
+    % Group by week - using appropriate aggregation for each variable
+    weeklyGrouped = groupsummary(tempTable, 'weekStarts', ...
+        {'mean', 'sum', 'mean', 'mean', 'sum', 'mean'}, ...
+        {'temperature', 'precipitation', 'visibility', 'windspeed', 'snow', 'sunhours'});
+    
+    weeklyWeather = struct();
+    weeklyWeather.weekStarts = weeklyGrouped.weekStarts;
+    weeklyWeather.avgTemperature = weeklyGrouped.mean_temperature;
+    weeklyWeather.totalPrecipitation = weeklyGrouped.sum_precipitation;
+    weeklyWeather.avgVisibility = weeklyGrouped.mean_visibility;
+    weeklyWeather.avgWindspeed = weeklyGrouped.mean_windspeed;
+    weeklyWeather.totalSnow = weeklyGrouped.sum_snow;
+    weeklyWeather.avgSunhours = weeklyGrouped.mean_sunhours;
+end
+
+function results = performRegressionAnalysis(weeklyData, isValid)
+    % Perform multiple regression analysis
+    
+    % Prepare predictor matrix
+    X = [weeklyData.temperature(isValid), ...
+         weeklyData.precipitation(isValid), ...
+         weeklyData.visibility(isValid), ...
+         weeklyData.windspeed(isValid), ...
+         weeklyData.snow(isValid), ...
+         weeklyData.sunhours(isValid), ...
+         weeklyData.daylightHours(isValid)];
+    
+    y = weeklyData.counts(isValid);
+    
+    % Standardize predictors for fair comparison
+    [X_std, mu, sigma] = zscore(X);
+    
+    % Add intercept term
+    X_std = [ones(size(X_std,1),1), X_std];
+    
+    % Fit linear model
+    [b, bint, r, rint, stats] = regress(y, X_std);
+    
+    % Calculate additional statistics
+    results = struct();
+    results.coefficients = b;
+    results.coefficientNames = {'Intercept', 'Temperature', 'Precipitation', ...
+        'Visibility', 'Windspeed', 'Snow', 'Sunhours', 'DaylightHours'};
+    results.standardizedCoefficients = b(2:end); % Excluding intercept
+    results.pValues = stats(3);
+    results.rSquared = stats(1);
+    results.fStatistic = stats(2);
+    results.nObservations = length(y);
+    
+    % Calculate variable importance (absolute standardized coefficients)
+    results.importance = abs(results.standardizedCoefficients);
+    
+    % Calculate partial R-squared for each predictor
+    results.partialRSquared = calculatePartialRSquared(X_std, y);
+    
+    % Store original data for further analysis
+    results.X = X;
+    results.X_std = X_std;
+    results.y = y;
+    results.mu = mu;
+    results.sigma = sigma;
+end
+
+function partialR2 = calculatePartialRSquared(X, y)
+    % Calculate partial R-squared for each predictor
+    
+    nPredictors = size(X, 2) - 1; % Excluding intercept
+    partialR2 = zeros(nPredictors, 1);
+    
+    % Full model R-squared
+    [~, ~, ~, ~, stats_full] = regress(y, X);
+    rSquaredFull = stats_full(1);
+    
+    % Calculate partial R-squared for each predictor
+    for i = 2:size(X, 2) % Skip intercept
+        % Create reduced model without predictor i
+        X_reduced = X;
+        X_reduced(:, i) = [];
+        
+        [~, ~, ~, ~, stats_reduced] = regress(y, X_reduced);
+        rSquaredReduced = stats_reduced(1);
+        
+        % Partial R-squared
+        partialR2(i-1) = rSquaredFull - rSquaredReduced;
+    end
+end
+
+function displayRegressionResults(results, locationName)
+    % Display regression results in a formatted table
+    
+    fprintf('\nMultiple Regression Results:\n');
+    fprintf('R-squared: %.3f\n', results.rSquared);
+    fprintf('F-statistic: %.2f\n', results.fStatistic);
+    fprintf('Sample size: %d weeks\n', results.nObservations);
+    fprintf('\nStandardized Coefficients and Importance:\n');
+    fprintf('%-15s %10s %10s %12s\n', 'Variable', 'Std. Coef', 'Importance', 'Partial R²');
+    fprintf('%s\n', repmat('-', 1, 50));
+    
+    [~, sortIdx] = sort(results.importance, 'descend');
+    
+    for i = sortIdx'
+        fprintf('%-15s %10.3f %10.3f %12.3f\n', ...
+            results.coefficientNames{i+1}, ... % +1 to skip intercept
+            results.standardizedCoefficients(i), ...
+            results.importance(i), ...
+            results.partialRSquared(i));
+    end
+end
+
+function plotVariableImportanceSingle(results, locationInfo, analysis, style)
+    % Original single-location plot function
+    
+    figure('Position', [408 126 800 600]);
+    
+    % Sort by importance
+    [sortedImportance, sortIdx] = sort(results.importance, 'descend');
+    sortedNames = results.coefficientNames(sortIdx + 1); % +1 to skip intercept
+    
+    % Create bar plot
+    b = bar(sortedImportance);
+    set(b, 'FaceColor', locationInfo.plotColor);
+    
+    % Customize plot
+    set(gca, 'XTickLabel', sortedNames);
+    xtickangle(45);
+    ylabel('Variable Importance (|Standardized Coefficient|)', ...
+        'FontSize', style.labelFontSize, 'FontWeight', 'bold');
+    title(sprintf('Weather Variable Importance for %s\n%s (R² = %.3f)', ...
+        analysis.modeDisplayString, locationInfo.name, results.rSquared), ...
+        'FontSize', style.titleFontSize);
+    
+    grid on;
+    set(gca, 'FontSize', style.axisFontSize);
+    set(gca, 'Color', style.axisBackgroundColor);
+    
+    % Add value labels on bars
+    for i = 1:length(sortedImportance)
+        text(i, sortedImportance(i), sprintf('%.3f', sortedImportance(i)), ...
+            'HorizontalAlignment', 'center', ...
+            'VerticalAlignment', 'bottom', ...
+            'FontSize', style.axisFontSize * 0.8);
+    end
+end
+
+function plotCombinedVariableImportance(allResults, allLocationInfo, analysis, style)
+    % Create a single figure with grouped bars for all locations
+    
+    figure('Position', [408 126 1000 700]);
+    
+    % Get variable names from first location
+    variableNames = allResults{1}.coefficientNames(2:end); % Skip intercept
+    nVars = length(variableNames);
+    nLocations = length(allResults);
+    
+    % Prepare data matrix for grouped bar plot
+    importanceMatrix = zeros(nVars, nLocations);
+    for locIdx = 1:nLocations
+        importanceMatrix(:, locIdx) = allResults{locIdx}.importance;
+    end
+    
+    % Sort by average importance across locations
+    avgImportance = mean(importanceMatrix, 2);
+    [~, sortIdx] = sort(avgImportance, 'descend');
+    
+    % Reorder data
+    sortedImportance = importanceMatrix(sortIdx, :);
+    sortedNames = variableNames(sortIdx);
+    
+    % Create grouped bar plot
+    b = bar(sortedImportance);
+    
+    % Set colors for each location
+    for locIdx = 1:nLocations
+        set(b(locIdx), 'FaceColor', allLocationInfo{locIdx}.plotColor);
+        set(b(locIdx), 'EdgeColor', 'white');
+        set(b(locIdx), 'LineWidth', 1);
+    end
+    
+    % Customize plot
+    set(gca, 'XTickLabel', sortedNames);
+    xtickangle(45);
+    ylabel('Variable Importance (|Standardized Coefficient|)', ...
+        'FontSize', style.labelFontSize, 'FontWeight', 'bold');
+    
+    % Create title with R² values for all locations
+    rSquaredValues = arrayfun(@(x) x{1}.rSquared, allResults);
+    rSquaredStr = sprintf('R² = %.3f', rSquaredValues(1));
+    for i = 2:length(rSquaredValues)
+        rSquaredStr = sprintf('%s, %.3f', rSquaredStr, rSquaredValues(i));
+    end
+    
+    title(sprintf('Weather Variable Importance for %s\n%s', ...
+        analysis.modeDisplayString, rSquaredStr), ...
+        'FontSize', style.titleFontSize);
+    
+    % Add legend with location names
+    legendNames = {};
+    for locIdx = 1:nLocations
+        legendNames{locIdx} = extractLocationShortName(allLocationInfo{locIdx}.name);
+    end
+    legend(legendNames, 'Location', 'northeast', 'FontSize', style.legendFontSize);
+    
+    grid on;
+    set(gca, 'FontSize', style.axisFontSize);
+    set(gca, 'Color', style.axisBackgroundColor);
+    
+    % Add value labels on bars
+    for varIdx = 1:nVars
+        for locIdx = 1:nLocations
+            % Calculate x position for each bar in the group
+            groupWidth = min(0.8, nLocations/(nLocations+1.5));
+            xPos = varIdx - groupWidth/2 + (2*locIdx-1) * groupWidth / (2*nLocations);
+            yPos = sortedImportance(varIdx, locIdx);
+            
+            text(xPos, yPos, sprintf('%.2f', yPos), ...
+                'HorizontalAlignment', 'center', ...
+                'VerticalAlignment', 'bottom', ...
+                'FontSize', style.axisFontSize * 0.7);
+        end
+    end
+    
+    % Set y-axis limit with some headroom
+    ylim([0 max(sortedImportance(:)) * 1.15]);
+end
+
+function performVisibilityDegradationAnalysis(weeklyData, isValid, locationName)
+    % Analyze potential visibility-related detection degradation
+    
+    fprintf('\n--- Visibility Degradation Analysis ---\n');
+    
+    % Define visibility bins
+    visBins = [0, 5, 7, 9, 11]; % Poor, Moderate, Good, Excellent
+    visBinLabels = {'Poor (<5km)', 'Moderate (5-7km)', 'Good (7-9km)', 'Excellent (>9km)'};
+    
+    validData = struct();
+    fields = fieldnames(weeklyData);
+    for i = 1:length(fields)
+        validData.(fields{i}) = weeklyData.(fields{i})(isValid);
+    end
+    
+    % Analyze count distributions by visibility bin
+    fprintf('Count statistics by visibility category:\n');
+    fprintf('%-20s %8s %8s %8s %8s\n', 'Visibility', 'N', 'Mean', 'Std', 'CV');
+    fprintf('%s\n', repmat('-', 1, 60));
+    
+    for i = 1:length(visBins)-1
+        inBin = validData.visibility >= visBins(i) & validData.visibility < visBins(i+1);
+        
+        if sum(inBin) > 0
+            binCounts = validData.counts(inBin);
+            meanCount = mean(binCounts);
+            stdCount = std(binCounts);
+            cv = stdCount / meanCount; % Coefficient of variation
+            
+            fprintf('%-20s %8d %8.0f %8.0f %8.2f\n', ...
+                visBinLabels{i}, sum(inBin), meanCount, stdCount, cv);
+        end
+    end
+    
+    % Test for visibility-temperature interaction
+    % This helps separate behavioral from detection effects
+    tempLow = validData.temperature < median(validData.temperature);
+    tempHigh = ~tempLow;
+    
+    fprintf('\nVisibility effect by temperature:\n');
+    
+    % Low temperature correlation
+    if sum(tempLow) > 10
+        [r_low, p_low] = corr(validData.visibility(tempLow), validData.counts(tempLow));
+        fprintf('Low temperature (n=%d): r = %.3f, p = %.3f\n', sum(tempLow), r_low, p_low);
+    end
+    
+    % High temperature correlation  
+    if sum(tempHigh) > 10
+        [r_high, p_high] = corr(validData.visibility(tempHigh), validData.counts(tempHigh));
+        fprintf('High temperature (n=%d): r = %.3f, p = %.3f\n', sum(tempHigh), r_high, p_high);
+    end
+    
+    % Analyze residuals vs visibility
+    % Large residuals at low visibility might indicate detection issues
+    if isfield(weeklyData, 'expectedCounts')
+        residuals = validData.counts - validData.expectedCounts;
+        [r_resid, p_resid] = corr(validData.visibility, residuals);
+        fprintf('\nResidual correlation with visibility: r = %.3f, p = %.3f\n', ...
+            r_resid, p_resid);
     end
 end
