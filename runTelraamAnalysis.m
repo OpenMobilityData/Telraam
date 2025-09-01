@@ -31,7 +31,7 @@ modeString = 'Bike Total'; modeDisplayString = 'Bike Counts';
 
 analysis = struct( ...
     'startTime', datetime(2024,08,15,00,00,01), ...
-    'endTime', datetime(2025,07,31,23,59,59), ...
+    'endTime', datetime(2025,08,31,23,59,59), ...
     'modeString', modeString, ...
     'modeDisplayString', modeDisplayString, ...
     'uptimeThreshold', 0.0, ...
@@ -92,7 +92,7 @@ style = struct( ...
 % Multi-modal analysis parameters
 multiModal = struct( ...
     'enabled', true, ...
-    'location', easternSegmentName, ...  % Which location to analyze
+    'location', westernSegmentName, ...  % Which location to analyze
     'modes', {{'Bike Total', 'Pedestrian Total', 'Car Total'}}, ...
     'modeDisplayNames', {{'Bike Counts', 'Pedestrian Counts', 'Car Counts'}}, ...
     'modeColors', {{[0 0 1], [0 0.8 0], [1 0 0], [0 0.8 0.8]}}, ...  % Note the double braces
@@ -2782,7 +2782,7 @@ function plotModalityPieCharts(locationData, analysis, style)
     
     % Add overall figure title
     sgtitle(sprintf('Traffic Modality Breakdown (%s to %s)', ...
-        datestr(analysis.startTime, 'mmm dd'), datestr(analysis.endTime, 'mmm dd yyyy')), ...
+        datestr(analysis.startTime, 'mmm dd yyyy'), datestr(analysis.endTime, 'mmm dd yyyy')), ...
         'FontSize', style.titleFontSize + 2, 'FontWeight', 'bold');
 end
 
@@ -3038,7 +3038,7 @@ function plotModalityBarChart(locationData, analysis, style)
         set(gca, 'Color', style.axisBackgroundColor);
         
         title(sprintf('Traffic Modality Comparison (%s to %s)', ...
-            datestr(analysis.startTime, 'mmm dd'), datestr(analysis.endTime, 'mmm dd yyyy')), ...
+            datestr(analysis.startTime, 'mmm dd yyyy'), datestr(analysis.endTime, 'mmm dd yyyy')), ...
             'FontSize', style.titleFontSize, 'FontWeight', 'bold');
     end
 end
@@ -4808,36 +4808,48 @@ function plotBikeModalityCorrelation(locationData, analysis, plots, style)
             
             % Get weekly bike counts and weekly counts for the comparison mode
             [bikeCounts, modeCounts, weekStarts, validIdx] = prepareWeeklyModalityData(data, analysis, currentMode.columnName);
-            
+
             if ~isempty(bikeCounts) && length(bikeCounts) >= 3
                 % Calculate trend line first to get slope for legend
                 locationSlope = NaN; % Default if trend calculation fails
+                locationHorizontalIntercept = NaN; % Default if trend calculation fails
                 if length(bikeCounts) > 3
                     [trendParams, trendStats] = calculateLocationTrend(modeCounts, bikeCounts);
-                    
+
                     if ~isempty(trendParams)
                         locationSlope = trendParams.slope;
-                        
+                        locationHorizontalIntercept = trendParams.horizontalIntercept;
+
                         % Plot trend line
                         xRange = linspace(min(modeCounts), max(modeCounts), 100);
                         trendLine = trendParams.slope * xRange + trendParams.intercept;
-                        
+
                         plot(xRange, trendLine, '--', ...
                             'Color', locationInfo.plotColor, ...
                             'LineWidth', 1.5, ...
                             'HandleVisibility', 'off');  % Don't show in legend
                     end
                 end
-                
-                % Create display name with slope if available
-                if ~isnan(locationSlope)
+
+                % Create display name with slope and horizontal intercept if available
+                if ~isnan(locationSlope) && ~isnan(locationHorizontalIntercept)
+                    if locationHorizontalIntercept >= 0
+                        displayName = sprintf('%s (%d weeks, slope = %.3f, x-intercept = %s)', ...
+                            extractLocationShortName(locationInfo.name), length(bikeCounts), ...
+                            locationSlope, num2sepstr(locationHorizontalIntercept,'%.0f'));
+                    else
+                        % Handle negative intercepts (which don't make physical sense for counts)
+                        displayName = sprintf('%s (%d weeks, slope = %.3f, x-intercept < 0)', ...
+                            extractLocationShortName(locationInfo.name), length(bikeCounts), ...
+                            locationSlope);
+                    end
+                elseif ~isnan(locationSlope)
                     displayName = sprintf('%s (%d weeks, slope = %.3f)', ...
                         extractLocationShortName(locationInfo.name), length(bikeCounts), locationSlope);
                 else
                     displayName = sprintf('%s (%d weeks)', ...
                         extractLocationShortName(locationInfo.name), length(bikeCounts));
                 end
-                
                 % Create scatter plot for this location
                 h = scatter(modeCounts, bikeCounts, 80, ...
                     'MarkerFaceColor', locationInfo.plotColor, ...
@@ -4945,6 +4957,14 @@ function [trendParams, trendStats] = calculateLocationTrend(xData, yData)
         p = polyfit(xData, yData, 1);
         trendParams.slope = p(1);
         trendParams.intercept = p(2);
+        
+        % Calculate horizontal intercept (x-intercept: where y = 0)
+        % From y = mx + b, when y = 0, x = -b/m
+        if abs(trendParams.slope) > 0.001  % Avoid division by very small numbers
+            trendParams.horizontalIntercept = -trendParams.intercept / trendParams.slope;
+        else
+            trendParams.horizontalIntercept = NaN;  % Undefined for near-zero slope
+        end
         
         % Calculate regression statistics
         yPred = polyval(p, xData);
