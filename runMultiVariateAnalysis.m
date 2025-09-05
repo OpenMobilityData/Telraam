@@ -231,8 +231,54 @@ function zeroCountAnalysis = analyzeZeroCountPeriods(locationData, weatherData, 
     plotZeroPeriodComparison(zeroCountAnalysis, style);
 end
 
+% Function duplicated from runTelraamAnalysis
+function dailyData = calculateDailyTotals(locationDataStruct, analysis)
+    % Extract the data timetable from the structure
+    data = locationDataStruct.data;
+    
+    % Create daily grouping
+    data.DayOnly = dateshift(data.('Date and Time (Local)'), 'start', 'day');
+    
+    % Calculate raw daily totals
+    groupedData = groupsummary(data, 'DayOnly', 'sum', analysis.modeString);
+    
+    % Calculate adjusted daily totals (for times up to cutoff)
+    truncatedData = data(timeofday(data.('Date and Time (Local)')) <= analysis.truncationCutoffTime, :);
+    adjustedGrouped = groupsummary(truncatedData, 'DayOnly', 'sum', 'AdjustedCountsUptimeDaylight');
+    
+    % Also get daylight data counts per day to identify days with no daylight data
+    daylightGrouped = groupsummary(data, 'DayOnly', 'sum', 'Daylight');
+    
+    % Combine results
+    dailyData = struct();
+    dailyData.dates = groupedData.DayOnly;
+    
+    % Use the original column name with groupsummary's 'sum_' prefix
+    sumColumnName = ['sum_' analysis.modeString];
+    dailyData.rawCounts = groupedData.(sumColumnName);
+    
+    % Match adjusted counts to raw count dates
+    [~, ia, ib] = intersect(groupedData.DayOnly, adjustedGrouped.DayOnly);
+    adjustedCounts = nan(size(dailyData.rawCounts));
+    adjustedCounts(ia) = adjustedGrouped.sum_AdjustedCountsUptimeDaylight(ib);
+    
+    % Ensure adjusted is at least as large as raw
+    dailyData.adjustedCounts = max(dailyData.rawCounts, adjustedCounts);
+    
+    % Filter out days with no daylight data (sum_Daylight = 0)
+    [~, ic, id] = intersect(groupedData.DayOnly, daylightGrouped.DayOnly);
+    daylightCounts = zeros(size(dailyData.rawCounts));
+    daylightCounts(ic) = daylightGrouped.sum_Daylight(id);
+    
+    % Keep only days that have some daylight data
+    validDays = daylightCounts > 0;
+    dailyData.dates = dailyData.dates(validDays);
+    dailyData.rawCounts = dailyData.rawCounts(validDays);
+    dailyData.adjustedCounts = dailyData.adjustedCounts(validDays);
+end
+
 function recoveryAnalysis = analyzeRecoveryPatterns(locationData, weatherData, analysis, style)
-    % Analyze recovery patterns after extreme weather events
+    % Analyze recovery patterns after extreme weather events - using REAL data
     
     modes = {'Bike Total', 'Car Total', 'Pedestrian Total'};
     modeNames = {'Bikes', 'Cars', 'Pedestrians'};
@@ -240,35 +286,268 @@ function recoveryAnalysis = analyzeRecoveryPatterns(locationData, weatherData, a
     recoveryAnalysis = struct();
     locationNames = fieldnames(locationData);
     
-    % Define extreme weather events (cold snaps, snow storms)
-    extremeEvents = identifyExtremeWeatherEvents(weatherData);
+    % Focus on Valentine's Day 2025 blizzard
+    valentinesDay = datetime(2025, 2, 13);
     
-    fprintf('Identified %d extreme weather events\n\n', length(extremeEvents));
+    % Find the blizzard period in weather data
+    dateIdx = find(weatherData.dates >= valentinesDay - days(1) & ...
+                   weatherData.dates <= valentinesDay + days(1));
     
+    if isempty(dateIdx)
+        fprintf('Valentine''s Day blizzard not found in weather data\n');
+        return;
+    end
+    
+    % Check precipitation and temperature around Valentine's Day
+    stormPrecip = weatherData.precipitation(dateIdx);
+    stormTemp = weatherData.temperature(dateIdx);
+    
+    fprintf('Valentine''s Day Blizzard Analysis:\n');
+    fprintf('  Date range: %s to %s\n', ...
+        datestr(weatherData.dates(dateIdx(1))), datestr(weatherData.dates(dateIdx(end))));
+    fprintf('  Max precipitation: %.1f mm\n', max(stormPrecip));
+    fprintf('  Temperature range: %.1f to %.1f°C\n', min(stormTemp), max(stormTemp));
+    fprintf('\n');
+    
+    % Define analysis period: 7 days before to 14 days after
+    preDays = 7;
+    postDays = 14;
+    analysisStart = valentinesDay - days(preDays);
+    analysisEnd = valentinesDay + days(postDays);
+    
+    % Analyze each location
     for locIdx = 1:length(locationNames)
         locationName = locationNames{locIdx};
         data = locationData.(locationName);
         
+        fprintf('Location: %s\n', extractLocationShortName(locationName));
         recoveryAnalysis.(locationName) = struct();
         
         for modeIdx = 1:length(modes)
             currentMode = modes{modeIdx};
             modeName = modeNames{modeIdx};
             
-            % Analyze recovery for each event
+            % Get daily counts for analysis period
             tempAnalysis = analysis;
             tempAnalysis.modeString = currentMode;
             
-            recoveryMetrics = analyzeEventRecovery(data, weatherData, tempAnalysis, extremeEvents);
-            recoveryAnalysis.(locationName).(modeName) = recoveryMetrics;
+            % Extract daily data
+            dailyData = calculateDailyTotals(data, tempAnalysis);
+            
+            % Find data within analysis window
+            periodMask = dailyData.dates >= analysisStart & dailyData.dates <= analysisEnd;
+            periodDates = dailyData.dates(periodMask);
+            periodCounts = dailyData.rawCounts(periodMask);
+            
+            if length(periodCounts) < (preDays + postDays)/2
+                fprintf('  %s: Insufficient data for recovery analysis\n', modeName);
+                continue;
+            end
+            
+            % Calculate baseline (average of pre-storm week)
+            preStormMask = periodDates < valentinesDay & periodDates >= valentinesDay - days(preDays);
+            baseline = mean(periodCounts(preStormMask), 'omitnan');
+            
+            % Calculate recovery metrics
+            stormDayIdx = find(periodDates == valentinesDay);
+            if isempty(stormDayIdx)
+                % Find closest day
+                [~, stormDayIdx] = min(abs(periodDates - valentinesDay));
+            end
+            
+            % Extract post-storm recovery
+            postStormDates = periodDates(stormDayIdx:end);
+            postStormCounts = periodCounts(stormDayIdx:end);
+            
+            % Calculate recovery percentages
+            recoveryPct = (postStormCounts / baseline) * 100;
+            
+            % Find days to various recovery levels
+            days50 = find(recoveryPct >= 50, 1) - 1;
+            days75 = find(recoveryPct >= 75, 1) - 1;
+            days90 = find(recoveryPct >= 90, 1) - 1;
+            days95 = find(recoveryPct >= 95, 1) - 1;
+            
+            % Store results
+            recoveryAnalysis.(locationName).(modeName) = struct();
+            recoveryAnalysis.(locationName).(modeName).baseline = baseline;
+            recoveryAnalysis.(locationName).(modeName).stormDayCount = postStormCounts(1);
+            recoveryAnalysis.(locationName).(modeName).dropPercent = (1 - postStormCounts(1)/baseline) * 100;
+            recoveryAnalysis.(locationName).(modeName).recoveryDates = postStormDates;
+            recoveryAnalysis.(locationName).(modeName).recoveryCounts = postStormCounts;
+            recoveryAnalysis.(locationName).(modeName).recoveryPct = recoveryPct;
+            recoveryAnalysis.(locationName).(modeName).daysTo50 = days50;
+            recoveryAnalysis.(locationName).(modeName).daysTo75 = days75;
+            recoveryAnalysis.(locationName).(modeName).daysTo90 = days90;
+            recoveryAnalysis.(locationName).(modeName).daysTo95 = days95;
+            
+            % Report findings
+            fprintf('  %s: Baseline=%.0f, Storm day=%.0f (%.0f%% drop)\n', ...
+                modeName, baseline, postStormCounts(1), ...
+                (1 - postStormCounts(1)/baseline) * 100);
+            
+            if ~isempty(days90)
+                fprintf('    Days to 90%% recovery: %d\n', days90);
+            else
+                fprintf('    Did not reach 90%% recovery within %d days\n', postDays);
+            end
+        end
+        fprintf('\n');
+    end
+    
+    % Create visualization with real data
+    plotRealRecoveryPatterns(recoveryAnalysis, valentinesDay, style);
+    
+    % Report average recovery times
+    reportRealRecoveryTimes(recoveryAnalysis);
+end
+
+function plotRealRecoveryPatterns(recoveryAnalysis, stormDate, style)
+    % Plot actual recovery patterns from Valentine's Day blizzard
+    
+    figure('Position', [250 250 1200 700]);
+    
+    locationNames = fieldnames(recoveryAnalysis);
+    modes = {'Bikes', 'Cars', 'Pedestrians'};
+    colors = {[0 0 1], [1 0 0], [0 0.7 0]};
+    markers = {'o-', 's-', '^-'};
+    
+    % Combine data from both locations
+    subplot(2,1,1);
+    hold on;
+    
+    legendEntries = {};
+    plotHandles = [];
+    
+    for modeIdx = 1:length(modes)
+        modeName = modes{modeIdx};
+        
+        % Average across locations if data exists
+        allRecoveryPct = [];
+        validLocations = 0;
+        
+        for locIdx = 1:length(locationNames)
+            locationName = locationNames{locIdx};
+            if isfield(recoveryAnalysis.(locationName), modeName)
+                modeData = recoveryAnalysis.(locationName).(modeName);
+                if ~isempty(modeData.recoveryPct)
+                    if isempty(allRecoveryPct)
+                        allRecoveryPct = modeData.recoveryPct;
+                    else
+                        % Align by days since storm
+                        minLen = min(length(allRecoveryPct), length(modeData.recoveryPct));
+                        allRecoveryPct(1:minLen) = (allRecoveryPct(1:minLen) + modeData.recoveryPct(1:minLen)) / 2;
+                    end
+                    validLocations = validLocations + 1;
+                end
+            end
+        end
+        
+        if ~isempty(allRecoveryPct) && validLocations > 0
+            days = 0:(length(allRecoveryPct)-1);
+            h = plot(days, allRecoveryPct, markers{modeIdx}, ...
+                'Color', colors{modeIdx}, 'LineWidth', 2, 'MarkerSize', 8);
+            plotHandles = [plotHandles, h];
+            legendEntries{end+1} = modeName;
         end
     end
     
-    % Create recovery visualization
-    plotRecoveryPatterns(recoveryAnalysis, extremeEvents, style);
+    % Add reference lines
+    line(xlim, [100 100], 'Color', 'k', 'LineStyle', '--', 'LineWidth', 1);
+    line(xlim, [90 90], 'Color', 'k', 'LineStyle', ':', 'LineWidth', 1);
     
-    % Report average recovery times
-    reportRecoveryTimes(recoveryAnalysis);
+    xlabel('Days After Storm');
+    ylabel('Recovery (% of Pre-Storm Baseline)');
+    title(sprintf('Actual Recovery After Valentine''s Day 2025 Blizzard (%s)', ...
+        datestr(stormDate, 'mmm dd')));
+    legend(plotHandles, legendEntries, 'Location', 'southeast');
+    grid on;
+    %xlim([0 14]);
+    %ylim([0 120]);
+    
+    % Add annotations
+    text(0.5, 10, 'Storm Day', 'HorizontalAlignment', 'center', ...
+        'FontSize', 12, 'FontWeight', 'bold', 'Color', 'r');
+    
+    % Bottom panel: Show actual drop percentages
+    subplot(2,1,2);
+    
+    dropData = [];
+    dropLabels = {};
+    
+    for locIdx = 1:length(locationNames)
+        locationName = locationNames{locIdx};
+        locShortName = extractLocationShortName(locationName);
+        
+        for modeIdx = 1:length(modes)
+            modeName = modes{modeIdx};
+            if isfield(recoveryAnalysis.(locationName), modeName) && ...
+               isfield(recoveryAnalysis.(locationName).(modeName), 'dropPercent')
+                dropData(end+1) = recoveryAnalysis.(locationName).(modeName).dropPercent;
+                dropLabels{end+1} = sprintf('%s-%s', locShortName, modeName);
+            end
+        end
+    end
+    
+    if ~isempty(dropData)
+        b = bar(-dropData);
+        set(gca, 'XTick', 1:length(dropLabels));
+        set(gca, 'XTickLabel', dropLabels);
+        ylabel('Activity Change on Storm Day (%)');
+        title('Immediate Impact of Blizzard by Mode and Location');
+        grid on;
+        %ylim([0 max(dropData)*1.1]);
+        xtickangle(45);
+    end
+    
+    sgtitle('Valentine''s Day 2025 Blizzard Recovery Analysis', 'FontSize', style.titleFontSize);
+end
+
+function reportRealRecoveryTimes(recoveryAnalysis)
+    % Report actual recovery times from the analysis
+    
+    fprintf('\n=== ACTUAL Recovery Time Summary ===\n');
+    
+    locationNames = fieldnames(recoveryAnalysis);
+    modes = {'Bikes', 'Cars', 'Pedestrians'};
+    
+    % Collect recovery times
+    recoveryDays90 = zeros(length(modes), length(locationNames));
+    
+    for locIdx = 1:length(locationNames)
+        for modeIdx = 1:length(modes)
+            if isfield(recoveryAnalysis.(locationNames{locIdx}), modes{modeIdx})
+                modeData = recoveryAnalysis.(locationNames{locIdx}).(modes{modeIdx});
+                if isfield(modeData, 'daysTo90') && ~isempty(modeData.daysTo90)
+                    recoveryDays90(modeIdx, locIdx) = modeData.daysTo90;
+                else
+                    recoveryDays90(modeIdx, locIdx) = NaN;
+                end
+            else
+                recoveryDays90(modeIdx, locIdx) = NaN;
+            end
+        end
+    end
+    
+    % Report average days to 90% recovery
+    fprintf('\nAverage days to 90%% recovery after Valentine''s Day blizzard:\n');
+    for modeIdx = 1:length(modes)
+        avgDays = nanmean(recoveryDays90(modeIdx, :));
+        if ~isnan(avgDays)
+            fprintf('  %s: %.1f days\n', modes{modeIdx}, avgDays);
+        else
+            fprintf('  %s: Did not reach 90%% recovery\n', modes{modeIdx});
+        end
+    end
+    
+    % Key insight
+    fprintf('\nKey Finding: ');
+    bikeRecovery = nanmean(recoveryDays90(1, :));
+    carRecovery = nanmean(recoveryDays90(2, :));
+    
+    if ~isnan(bikeRecovery) && ~isnan(carRecovery)
+        fprintf('Bikes took %.0fx longer than cars to recover\n', bikeRecovery/carRecovery);
+    end
 end
 
 function infrastructureAnalysis = analyzeLocationDifferences(locationData, weatherData, analysis, style)
