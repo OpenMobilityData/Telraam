@@ -92,7 +92,6 @@ style = struct( ...
 % Multi-modal analysis parameters
 multiModal = struct( ...
     'enabled', true, ...
-    'location', easternSegmentName, ...  % Which location to analyze
     'modes', {{'Bike Total', 'Pedestrian Total', 'Car Total'}}, ...
     'modeDisplayNames', {{'Bike Counts', 'Pedestrian Counts', 'Car Counts'}}, ...
     'modeColors', {{[0 0 1], [0 0.8 0], [1 0 0], [0 0.8 0.8]}}, ...  % Note the double braces
@@ -217,12 +216,37 @@ plotBikeModalityCorrelation(locationData, analysis, plots, style);
 plotModalityPieCharts(locationData, analysis, style);
 plotModalityBarChart(locationData, analysis, style);
 
-%% Generate Multi-Modal Plots (if enabled)
+%% Generate Multi-Modal Plots for ALL Locations
 if multiModal.enabled
-    plotMultiModalDaily(locationData, weatherData, analysis, plots, style, multiModal);
-    plotMultiModalWeekly(locationData, weatherData, analysis, plots, style, multiModal);
-    plotMultiModalMonthly(locationData, weatherData, analysis, plots, style, multiModal);
-    %plotMultiModalHourlyPatterns(locationData, analysis, plots, style, multiModal);
+    % Get all location names
+    locationNames = fieldnames(locationData);
+    
+    % Loop through each location
+    for locIdx = 1:length(locationNames)
+        currentLocationName = locationNames{locIdx};
+        
+        % Extract the actual location name from the field name
+        % (field names are MATLAB-valid versions of the location names)
+        actualLocationName = locationData.(currentLocationName).locationInfo.name;
+        
+        % Create a copy of multiModal config for this location
+        multiModalCurrent = multiModal;
+        multiModalCurrent.location = actualLocationName;
+        
+        fprintf('Generating multi-modal plots for location: %s\n', actualLocationName);
+        
+        % Generate plots for this location
+        try
+            plotMultiModalDaily(locationData, weatherData, analysis, plots, style, multiModalCurrent);
+            plotMultiModalWeekly(locationData, weatherData, analysis, plots, style, multiModalCurrent);
+            plotMultiModalMonthly(locationData, weatherData, analysis, plots, style, multiModalCurrent);
+            %plotMultiModalHourlyPatterns(locationData, analysis, plots, style, multiModalCurrent);
+        catch ME
+            warning('Failed to generate multi-modal plots for %s: %s', actualLocationName, ME.message);
+        end
+    end
+    
+    fprintf('Completed multi-modal plots for all %d locations.\n', length(locationNames));
 end
 
 %% ======================== FUNCTIONS ========================
