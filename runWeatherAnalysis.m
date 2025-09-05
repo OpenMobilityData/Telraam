@@ -10,6 +10,8 @@
 %   - analysis: analysis parameters including time range and mode
 %   - style: plotting style parameters
 
+close all; clc
+
 %% Check for required variables
 requiredVars = {'locationData', 'weatherData', 'analysis', 'style'};
 missingVars = {};
