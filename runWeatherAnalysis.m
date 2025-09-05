@@ -175,112 +175,200 @@ end
 %% ======================== SEASONAL BASELINE FUNCTIONS ========================
 
 function seasonalData = calculateSeasonalBaseline(weeklyData, isValid)
-    % Calculate expected seasonal patterns (using daylight hours or week of year)
+    % Calculate expected seasonal patterns using centered moving average
+    % with circular padding to handle edge effects
     
     seasonalData = struct();
     
-    % Option 1: Use daylight hours as seasonal proxy
+    % Option 1: Use daylight hours as seasonal proxy (keep existing)
     seasonalData.daylightHours = weeklyData.daylightHours(isValid);
     
-    % Option 2: Use sinusoidal seasonal pattern
+    % Option 2: Use sinusoidal seasonal pattern (keep existing)
     weekOfYear = week(weeklyData.dates(isValid));
     seasonalData.seasonalIndex = sin((weekOfYear - 13) * 2 * pi / 52); % Peak at week 13 (late March)
     
-    % Option 3: Monthly averages
+    % Option 3: Calculate seasonal baseline using centered moving average
+    window = 4; % 4-week window (about a month)
+    
+    % Sort data by date to ensure proper ordering
+    [sortedDates, sortIdx] = sort(weeklyData.dates);
+    sortedCounts = weeklyData.counts(sortIdx);
+    sortedValid = isValid(sortIdx);
+    
+    % Find valid data indices
+    validIndices = find(sortedValid);
+    if isempty(validIndices)
+        error('No valid data points for seasonal baseline calculation');
+    end
+    
+    % Extract only valid data for processing
+    validCounts = sortedCounts(validIndices);
+    validDates = sortedDates(validIndices);
+    
+    % Apply circular padding for seasonal continuity
+    extend_weeks = ceil(window/2);
+    
+    % Check if we have enough data points for circular padding
+    if length(validCounts) > extend_weeks
+        % Circular padding: connect end of year to beginning
+        extended_counts = [validCounts(end-extend_weeks+1:end); validCounts; validCounts(1:extend_weeks)];
+        
+        % Apply moving average to extended data
+        extended_avg = movmean(extended_counts, window, 'omitnan');
+        
+        % Extract the middle portion (original data length)
+        seasonal_avg_valid = extended_avg(extend_weeks+1:end-extend_weeks);
+    else
+        % If not enough data for circular padding, use shrinking window
+        seasonal_avg_valid = movmean(validCounts, window, 'omitnan', 'Endpoints', 'shrink');
+    end
+    
+    % Map back to full data array
+    allSeasonalAvg = nan(size(sortedCounts));
+    allSeasonalAvg(validIndices) = seasonal_avg_valid;
+    
+    % Map back to original order
+    invSortIdx(sortIdx) = 1:length(sortIdx);
+    seasonalAverage = allSeasonalAvg(invSortIdx);
+    
+    % Extract only the valid subset for output
+    seasonalData.monthlyAverage = seasonalAverage(isValid);
+    
+    % Keep month information for compatibility with other functions
     months = month(weeklyData.dates(isValid));
     seasonalData.monthOfYear = months;
-    
-    % Calculate average counts by month for seasonal baseline
-    monthlyAvg = zeros(12, 1);
-    for m = 1:12
-        monthData = weeklyData.counts(isValid & month(weeklyData.dates) == m);
-        if ~isempty(monthData)
-            monthlyAvg(m) = mean(monthData);
-        else
-            monthlyAvg(m) = NaN;
-        end
-    end
-    
-    % Fill missing months with interpolation
-    validMonths = ~isnan(monthlyAvg);
-    if sum(validMonths) >= 2
-        monthlyAvg(~validMonths) = interp1(find(validMonths), monthlyAvg(validMonths), ...
-            find(~validMonths), 'linear', 'extrap');
-    end
-    
-    seasonalData.monthlyAverage = monthlyAvg(months);
 end
 
 function anomalyData = calculateWeatherAnomalies(weeklyData, seasonalData, isValid)
-    % Calculate deviations from seasonal norms
+    % Calculate deviations from seasonal norms using centered moving average
+    % with circular padding to handle edge effects
     
     anomalyData = struct();
+    window = 4; % 4-week window (about a month)
     
-    % For each week, calculate expected weather based on season
-    % Then compute anomalies as actual - expected
+    % Get dates for sorting
+    allDates = weeklyData.dates;
+    validDates = allDates(isValid);
     
-    % Temperature anomaly
-    tempByMonth = zeros(12, 1);
-    for m = 1:12
-        monthTemp = weeklyData.temperature(isValid & month(weeklyData.dates) == m);
-        if ~isempty(monthTemp)
-            tempByMonth(m) = mean(monthTemp);
+    %% Temperature anomaly calculation
+    
+    % Sort data by date
+    [sortedDates, sortIdx] = sort(allDates);
+    sortedTemp = weeklyData.temperature(sortIdx);
+    sortedValid = isValid(sortIdx);
+    
+    % Find valid data indices
+    validIndices = find(sortedValid);
+    if ~isempty(validIndices)
+        % Extract valid temperatures
+        validTemp = sortedTemp(validIndices);
+        
+        % Apply circular padding
+        extend_weeks = ceil(window/2);
+        if length(validTemp) > extend_weeks
+            extended_temp = [validTemp(end-extend_weeks+1:end); validTemp; validTemp(1:extend_weeks)];
+            extended_avg = movmean(extended_temp, window, 'omitnan');
+            seasonal_temp_valid = extended_avg(extend_weeks+1:end-extend_weeks);
         else
-            tempByMonth(m) = NaN;
+            seasonal_temp_valid = movmean(validTemp, window, 'omitnan', 'Endpoints', 'shrink');
         end
+        
+        % Map back to full array
+        seasonalTemp = nan(size(sortedTemp));
+        seasonalTemp(validIndices) = seasonal_temp_valid;
+        
+        % Map back to original order
+        invSortIdx(sortIdx) = 1:length(sortIdx);
+        expectedTemp = seasonalTemp(invSortIdx);
+        
+        % Calculate anomaly for valid data
+        anomalyData.temperatureAnomaly = weeklyData.temperature(isValid) - expectedTemp(isValid);
+    else
+        anomalyData.temperatureAnomaly = [];
     end
     
-    % Fill missing months
-    validMonths = ~isnan(tempByMonth);
-    if sum(validMonths) >= 2
-        tempByMonth(~validMonths) = interp1(find(validMonths), tempByMonth(validMonths), ...
-            find(~validMonths), 'linear', 'extrap');
-    end
+    %% Precipitation anomaly calculation (log-transformed)
     
-    months = seasonalData.monthOfYear;
-    expectedTemp = tempByMonth(months);
-    anomalyData.temperatureAnomaly = weeklyData.temperature(isValid) - expectedTemp;
+    % Reset sort indices for precipitation
+    clear invSortIdx;
+    sortedPrecip = weeklyData.precipitation(sortIdx);
     
-    % Precipitation anomaly (log-transformed due to skewness)
-    precipByMonth = zeros(12, 1);
-    for m = 1:12
-        monthPrecip = weeklyData.precipitation(isValid & month(weeklyData.dates) == m);
-        if ~isempty(monthPrecip)
-            precipByMonth(m) = mean(monthPrecip + 1); % Add 1 to avoid log(0)
+    if ~isempty(validIndices)
+        % Extract valid precipitation (add 1 to avoid log(0))
+        validPrecip = sortedPrecip(validIndices) + 1;
+        
+        % Apply circular padding
+        if length(validPrecip) > extend_weeks
+            extended_precip = [validPrecip(end-extend_weeks+1:end); validPrecip; validPrecip(1:extend_weeks)];
+            extended_avg = movmean(extended_precip, window, 'omitnan');
+            seasonal_precip_valid = extended_avg(extend_weeks+1:end-extend_weeks);
         else
-            precipByMonth(m) = NaN;
+            seasonal_precip_valid = movmean(validPrecip, window, 'omitnan', 'Endpoints', 'shrink');
         end
+        
+        % Map back to full array
+        seasonalPrecip = nan(size(sortedPrecip));
+        seasonalPrecip(validIndices) = seasonal_precip_valid;
+        
+        % Map back to original order
+        invSortIdx(sortIdx) = 1:length(sortIdx);
+        expectedPrecip = seasonalPrecip(invSortIdx);
+        
+        % Calculate log anomaly for valid data
+        anomalyData.precipitationAnomaly = log(weeklyData.precipitation(isValid) + 1) - log(expectedPrecip(isValid));
+    else
+        anomalyData.precipitationAnomaly = [];
     end
     
-    % Fill missing months
-    if sum(~isnan(precipByMonth)) >= 2
-        validMonths = ~isnan(precipByMonth);
-        precipByMonth(~validMonths) = interp1(find(validMonths), precipByMonth(validMonths), ...
-            find(~validMonths), 'linear', 'extrap');
-    end
+    %% Wind speed anomaly calculation
     
-    expectedPrecip = precipByMonth(months);
-    anomalyData.precipitationAnomaly = log(weeklyData.precipitation(isValid) + 1) - log(expectedPrecip);
+    % Reset sort indices for wind
+    clear invSortIdx;
+    sortedWind = weeklyData.windspeed(sortIdx);
     
-    % Wind speed anomaly
-    windByMonth = zeros(12, 1);
-    for m = 1:12
-        monthWind = weeklyData.windspeed(isValid & month(weeklyData.dates) == m);
-        if ~isempty(monthWind)
-            windByMonth(m) = mean(monthWind);
+    if ~isempty(validIndices)
+        % Extract valid wind speeds
+        validWind = sortedWind(validIndices);
+        
+        % Apply circular padding
+        if length(validWind) > extend_weeks
+            extended_wind = [validWind(end-extend_weeks+1:end); validWind; validWind(1:extend_weeks)];
+            extended_avg = movmean(extended_wind, window, 'omitnan');
+            seasonal_wind_valid = extended_avg(extend_weeks+1:end-extend_weeks);
         else
-            windByMonth(m) = NaN;
+            seasonal_wind_valid = movmean(validWind, window, 'omitnan', 'Endpoints', 'shrink');
         end
+        
+        % Map back to full array
+        seasonalWind = nan(size(sortedWind));
+        seasonalWind(validIndices) = seasonal_wind_valid;
+        
+        % Map back to original order
+        invSortIdx(sortIdx) = 1:length(sortIdx);
+        expectedWind = seasonalWind(invSortIdx);
+        
+        % Calculate anomaly for valid data
+        anomalyData.windspeedAnomaly = weeklyData.windspeed(isValid) - expectedWind(isValid);
+    else
+        anomalyData.windspeedAnomaly = [];
     end
     
-    if sum(~isnan(windByMonth)) >= 2
-        validMonths = ~isnan(windByMonth);
-        windByMonth(~validMonths) = interp1(find(validMonths), windByMonth(validMonths), ...
-            find(~validMonths), 'linear', 'extrap');
+    %% Handle empty anomaly data
+    
+    if isempty(anomalyData.temperatureAnomaly)
+        warning('No valid temperature anomaly data calculated');
+        anomalyData.temperatureAnomaly = zeros(sum(isValid), 1);
     end
     
-    expectedWind = windByMonth(months);
-    anomalyData.windspeedAnomaly = weeklyData.windspeed(isValid) - expectedWind;
+    if isempty(anomalyData.precipitationAnomaly)
+        warning('No valid precipitation anomaly data calculated');
+        anomalyData.precipitationAnomaly = zeros(sum(isValid), 1);
+    end
+    
+    if isempty(anomalyData.windspeedAnomaly)
+        warning('No valid wind speed anomaly data calculated');
+        anomalyData.windspeedAnomaly = zeros(sum(isValid), 1);
+    end
 end
 
 %% ======================== REGRESSION ANALYSIS FUNCTIONS ========================
@@ -425,6 +513,7 @@ end
 
 function plotDecomposedEffects(weeklyData, seasonalData, anomalyData, isValid, locationInfo, analysis, style)
     % Create visualization of decomposed effects
+    % Now uses the smooth seasonal baselines already calculated
     
     figure('Position', [408 126 1200 800]);
     
@@ -445,16 +534,12 @@ function plotDecomposedEffects(weeklyData, seasonalData, anomalyData, isValid, l
     subplot(3,1,2);
     plot(dates, weeklyData.temperature(isValid), 'r-', 'LineWidth', 1.5);
     hold on;
-    months = seasonalData.monthOfYear;
-    tempByMonth = zeros(12, 1);
-    for m = 1:12
-        monthTemp = weeklyData.temperature(isValid & month(weeklyData.dates) == m);
-        if ~isempty(monthTemp)
-            tempByMonth(m) = mean(monthTemp);
-        end
-    end
-    expectedTemp = tempByMonth(months);
+    
+    % Calculate expected temperature from the anomaly data
+    % Since anomaly = actual - expected, then expected = actual - anomaly
+    expectedTemp = weeklyData.temperature(isValid) - anomalyData.temperatureAnomaly;
     plot(dates, expectedTemp, 'r--', 'LineWidth', 2);
+    
     ylabel('Temperature (°C)');
     legend('Actual', 'Seasonal Normal', 'Location', 'northwest');
     grid on;
