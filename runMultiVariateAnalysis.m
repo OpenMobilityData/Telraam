@@ -821,6 +821,7 @@ function plotZeroPeriodComparison(zeroCountAnalysis, style)
     % Initialize data matrices for each metric
     totalZeroHours = [];
     percentZero = [];
+    percentNonZero = [];  % Add this for non-zero percentages
     maxDuration = [];
     labels = {};
     
@@ -845,11 +846,13 @@ function plotZeroPeriodComparison(zeroCountAnalysis, style)
                 stats = locData.(modeName).stats;
                 totalZeroHours(end+1) = stats.totalZeroHours;
                 percentZero(end+1) = stats.percentZero;
+                percentNonZero(end+1) = 100 - stats.percentZero;  % Calculate non-zero percentage
                 maxDuration(end+1) = stats.maxIntervalDuration;
             else
                 % Add zeros for modes without data
                 totalZeroHours(end+1) = 0;
                 percentZero(end+1) = 0;
+                percentNonZero(end+1) = 100;  % If no zero counts, then 100% non-zero
                 maxDuration(end+1) = 0;
             end
             
@@ -870,14 +873,14 @@ function plotZeroPeriodComparison(zeroCountAnalysis, style)
     ylim([0 max([totalZeroHours, 1])*1.1]); % Handle case where all are zero
     
     subplot(1,3,2);
-    bar(percentZero);
+    bar(percentNonZero);  % Changed from percentZero to percentNonZero
     ylabel('% of Daylight Hours');
-    title('Percentage of Time with Zero Counts');
+    title('Percentage of Hours with Non-Zero Counts');  % Updated title
     set(gca, 'XTick', 1:length(labels));
     set(gca, 'XTickLabel', labels);
     xtickangle(45);
     grid on;
-    ylim([0 max([percentZero, 1])*1.1]);
+    ylim([0 105]);  % Set y-axis limit to slightly above 100%
     
     subplot(1,3,3);
     bar(maxDuration);
