@@ -20,7 +20,7 @@ locations = {
            'plotColor', [0 0 0]);  % Black
 };
 
-%locations = {locations{1}};
+% locations = {locations{2}}; % Use to select a single location
 
 % Analysis parameters
 
@@ -31,7 +31,7 @@ modeString = 'Bike Total'; modeDisplayString = 'Bike Counts';
 
 analysis = struct( ...
     'startTime', datetime(2024,08,15,00,00,01), ...
-    'endTime', datetime(2025,08,31,23,59,59), ...
+    'endTime', datetime(2025,09,05,23,59,59), ...
     'modeString', modeString, ...
     'modeDisplayString', modeDisplayString, ...
     'uptimeThreshold', 0.0, ...
@@ -207,7 +207,9 @@ plotTemperatureScatterWeekly(locationData, weatherData, analysis, plots, style);
 % performMultivariateWeatherAnalysis(locationData, weatherData, analysis, style);
 
 %% Generate Scatter Plot comparing counts at the two locations
-plotLocationCorrelation(locationData, analysis, plots, style, 'daily');
+if length(locations) > 1
+    plotLocationCorrelation(locationData, analysis, plots, style, 'daily');
+end
 
 % Generate Bike vs Other Modalities Correlation Plots
 plotBikeModalityCorrelation(locationData, analysis, plots, style);
