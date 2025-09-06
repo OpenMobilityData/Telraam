@@ -31,7 +31,7 @@ modeString = 'Bike Total'; modeDisplayString = 'Bike Counts';
 
 analysis = struct( ...
     'startTime', datetime(2024,08,15,00,00,01), ...
-    'endTime', datetime(2025,09,05,23,59,59), ...
+    'endTime', datetime(2025,08,31,23,59,59), ...
     'modeString', modeString, ...
     'modeDisplayString', modeDisplayString, ...
     'uptimeThreshold', 0.0, ...
@@ -248,6 +248,9 @@ if multiModal.enabled
     
     fprintf('Completed multi-modal plots for all %d locations.\n', length(locationNames));
 end
+
+%% Generate Year-over-Year Comparison Plots
+plotYearOverYearComparisons(locationData, analysis, style);
 
 %% ======================== FUNCTIONS ========================
 
@@ -5430,3 +5433,557 @@ function addWeeklyVisibilityCorrelationStats(locationData, weatherData, analysis
     end
 end
 
+%% Year-over-Year Comparison Functions
+
+function plotYearOverYearComparisons(locationData, analysis, style)
+    % Generate year-over-year comparison plots for all modalities and time scales
+    
+    fprintf('\n=== Generating Year-over-Year Comparison Plots ===\n');
+    
+    % Define modalities to analyze
+    modalities = {
+        struct('columnName', 'Bike Total', 'displayName', 'Bike Counts', 'color', [0.2, 0.6, 0.2]);
+        struct('columnName', 'Pedestrian Total', 'displayName', 'Pedestrian Counts', 'color', [0.8, 0.4, 0.2]);
+        struct('columnName', 'Car Total', 'displayName', 'Car Counts', 'color', [0.6, 0.6, 0.6]);
+    };
+    
+    % Generate plots for each modality
+    for i = 1:length(modalities)
+        modality = modalities{i};
+        
+        % Create temporary analysis structure for this modality
+        modalityAnalysis = analysis;
+        modalityAnalysis.modeString = modality.columnName;
+        modalityAnalysis.modeDisplayString = modality.displayName;
+        
+        % Generate daily comparison
+        plotYearOverYearDaily(locationData, modalityAnalysis, style, modality);
+        
+        % Generate weekly comparison
+        plotYearOverYearWeekly(locationData, modalityAnalysis, style, modality);
+        
+        % Generate monthly comparison
+        plotYearOverYearMonthly(locationData, modalityAnalysis, style, modality);
+    end
+    
+    fprintf('Year-over-year comparison plots complete.\n\n');
+end
+
+function plotYearOverYearDaily(locationData, analysis, style, modality)
+    % Plot daily traffic patterns overlaid by year
+    
+    % Calculate corridor average daily data
+    dailyData = calculateCorridorDailyData(locationData, analysis);
+    
+    if isempty(dailyData.dates)
+        fprintf('No daily data available for %s\n', modality.displayName);
+        return;
+    end
+    
+    % Separate into 12-month periods starting August 15
+    yearPeriods = separate12MonthPeriods(dailyData.dates, dailyData.counts, 'daily');
+    
+    if isempty(yearPeriods)
+        fprintf('Insufficient data for year-over-year daily comparison of %s\n', modality.displayName);
+        return;
+    end
+    
+    % Create figure
+    figure('Position', [408 126 1132 921]);
+    hold on;
+    
+    % Generate colors for each year period
+    yearColors = generateYearColors(length(yearPeriods));
+    plotHandles = [];
+    
+    % Plot each year period
+    for i = 1:length(yearPeriods)
+        if ~isempty(yearPeriods(i).normalizedDates)
+            h = plot(yearPeriods(i).normalizedDates, yearPeriods(i).counts, '-', ...
+                'LineWidth', style.plotLineWidth * 0.5, ...
+                'Color', yearColors(i, :), ...
+                'DisplayName', sprintf('%s (n=%d days, total=%s)', ...
+                    yearPeriods(i).label, ...
+                    length(yearPeriods(i).normalizedDates), ...
+                    num2sepstr(sum(yearPeriods(i).counts), '%.0f')));
+            plotHandles = [plotHandles, h];
+        end
+    end
+    
+    % Format plot
+    formatYearOverYearPlotDaily(modality.displayName, style, plotHandles);
+    
+    hold off;
+end
+
+function plotYearOverYearWeekly(locationData, analysis, style, modality)
+    % Plot weekly traffic patterns overlaid by year
+    
+    % Calculate corridor average weekly data
+    weeklyData = calculateCorridorWeeklyData(locationData, analysis);
+    
+    if isempty(weeklyData.weekStarts)
+        fprintf('No weekly data available for %s\n', modality.displayName);
+        return;
+    end
+    
+    % Separate into 12-month periods starting August 15
+    yearPeriods = separate12MonthPeriods(weeklyData.weekStarts, weeklyData.counts, 'weekly');
+    
+    if isempty(yearPeriods)
+        fprintf('Insufficient data for year-over-year weekly comparison of %s\n', modality.displayName);
+        return;
+    end
+    
+    % Create figure
+    figure('Position', [408 126 1132 921]);
+    hold on;
+    
+    % Generate colors for each year period
+    yearColors = generateYearColors(length(yearPeriods));
+    plotHandles = [];
+    
+    % Plot each year period
+    for i = 1:length(yearPeriods)
+        if ~isempty(yearPeriods(i).normalizedDates)
+            h = plot(yearPeriods(i).normalizedDates, yearPeriods(i).counts, '-o', ...
+                'LineWidth', style.plotLineWidth * 0.5, ...
+                'MarkerSize', 4, ...
+                'Color', yearColors(i, :), ...
+                'MarkerFaceColor', yearColors(i, :), ...
+                'DisplayName', sprintf('%s (n=%d weeks, total=%s)', ...
+                    yearPeriods(i).label, ...
+                    length(yearPeriods(i).normalizedDates), ...
+                    num2sepstr(sum(yearPeriods(i).counts), '%.0f')));
+            plotHandles = [plotHandles, h];
+        end
+    end
+    
+    % Format plot
+    formatYearOverYearPlotWeekly(modality.displayName, style, plotHandles);
+    
+    hold off;
+end
+
+function plotYearOverYearMonthly(locationData, analysis, style, modality)
+    % Plot monthly traffic patterns overlaid by year
+    
+    % Calculate corridor average monthly data
+    monthlyData = calculateCorridorMonthlyData(locationData, analysis);
+    
+    if isempty(monthlyData.monthStarts)
+        fprintf('No monthly data available for %s\n', modality.displayName);
+        return;
+    end
+    
+    % Separate into 12-month periods starting August 15
+    yearPeriods = separate12MonthPeriods(monthlyData.monthStarts, monthlyData.counts, 'monthly');
+    
+    if isempty(yearPeriods)
+        fprintf('Insufficient data for year-over-year monthly comparison of %s\n', modality.displayName);
+        return;
+    end
+    
+    % Create figure
+    figure('Position', [408 126 1132 921]);
+    hold on;
+    
+    % Generate colors for each year period
+    yearColors = generateYearColors(length(yearPeriods));
+    plotHandles = [];
+    
+    % Plot each year period
+    for i = 1:length(yearPeriods)
+        if ~isempty(yearPeriods(i).normalizedDates)
+            h = plot(yearPeriods(i).normalizedDates, yearPeriods(i).counts, '-o', ...
+                'LineWidth', style.plotLineWidth * 0.5, ...
+                'MarkerSize', 6, ...
+                'Color', yearColors(i, :), ...
+                'MarkerFaceColor', yearColors(i, :), ...
+                'DisplayName', sprintf('%s (n=%d months, total=%s)', ...
+                    yearPeriods(i).label, ...
+                    length(yearPeriods(i).normalizedDates), ...
+                    num2sepstr(sum(yearPeriods(i).counts), '%.0f')));
+            plotHandles = [plotHandles, h];
+        end
+    end
+    
+    % Format plot
+    formatYearOverYearPlotMonthly(modality.displayName, style, plotHandles);
+    
+    hold off;
+end
+
+function yearPeriods = separate12MonthPeriods(dates, counts, aggregationType)
+    % Separate data into 12-month periods starting August 15
+    % Only create periods that have data within the analysis date range
+    
+    if isempty(dates)
+        yearPeriods = [];
+        return;
+    end
+    
+    % Sort data chronologically
+    [sortedDates, sortIdx] = sort(dates);
+    sortedCounts = counts(sortIdx);
+    
+    % Get the actual data range
+    minDate = min(sortedDates);
+    maxDate = max(sortedDates);
+    
+    % Find the first August 15 that would contain actual data
+    % Start from the year of the minimum date
+    minYear = year(minDate);
+    if month(minDate) < 8 || (month(minDate) == 8 && day(minDate) < 15)
+        firstAug15 = datetime(minYear - 1, 8, 15);
+    else
+        firstAug15 = datetime(minYear, 8, 15);
+    end
+    
+    % Initialize year periods
+    yearPeriods = [];
+    periodCount = 0;
+    
+    % Process data starting from the first August 15
+    currentAug15 = firstAug15;
+    
+    while currentAug15 <= maxDate
+        periodStart = currentAug15;
+        periodEnd = currentAug15 + years(1) - days(1); % Aug 14 of next year
+        
+        % Find data within this period
+        inPeriod = sortedDates >= periodStart & sortedDates <= periodEnd;
+        
+        % Only create a period if it has data AND overlaps with the actual data range
+        if any(inPeriod) && periodEnd >= minDate && periodStart <= maxDate
+            periodCount = periodCount + 1;
+            
+            periodDates = sortedDates(inPeriod);
+            periodCounts = sortedCounts(inPeriod);
+            
+            % Additional check: ensure we have substantial data, not just one point
+            % This helps avoid isolated points from boundary conditions
+            minDataPoints = 3; % Require at least 3 data points for a valid period
+            if strcmp(aggregationType, 'weekly')
+                minDataPoints = 2; % At least 2 weeks
+            elseif strcmp(aggregationType, 'monthly')
+                minDataPoints = 1; % At least 1 month
+            end
+            
+            if length(periodDates) >= minDataPoints
+                % Normalize dates to reference period (Aug 15, 2024 to Aug 14, 2025)
+                normalizedDates = normalizeDatesToReferenceYear(periodDates, periodStart);
+                
+                % Create label for this period
+                startYear = year(periodStart);
+                endYear = year(periodEnd);
+                label = sprintf('%d-%d', startYear, endYear);
+                
+                % Store period data
+                yearPeriods(periodCount).originalDates = periodDates;
+                yearPeriods(periodCount).normalizedDates = normalizedDates;
+                yearPeriods(periodCount).counts = periodCounts;
+                yearPeriods(periodCount).label = label;
+                yearPeriods(periodCount).periodStart = periodStart;
+                yearPeriods(periodCount).periodEnd = periodEnd;
+                
+                fprintf('Period %d (%s): %d data points from %s to %s\n', ...
+                    periodCount, label, sum(inPeriod), ...
+                    datestr(min(periodDates)), datestr(max(periodDates)));
+            else
+                % Skip this period due to insufficient data
+                periodCount = periodCount - 1; % Undo the increment
+                fprintf('Skipping period %s due to insufficient data points (%d < %d)\n', ...
+                    sprintf('%d-%d', year(periodStart), year(periodEnd)), ...
+                    length(periodDates), minDataPoints);
+            end
+        end
+        
+        % Move to next year
+        currentAug15 = currentAug15 + years(1);
+    end
+    
+    % Final check: ensure we don't have any periods with dates outside the expected range
+    for i = 1:length(yearPeriods)
+        if any(year(yearPeriods(i).normalizedDates) < 2024) || any(year(yearPeriods(i).normalizedDates) > 2025)
+            warning('Period %d has normalized dates outside 2024-2025 range', i);
+        end
+    end
+end
+
+function normalizedDates = normalizeDatesToReferenceYear(dates, periodStart)
+    % Normalize dates to reference period (Aug 15, 2024 to Aug 14, 2025)
+    
+    normalizedDates = NaT(size(dates));
+    
+    % Reference August 15 is always 2024
+    refAug15 = datetime(2024, 8, 15);
+    
+    for i = 1:length(dates)
+        % Calculate days since period start
+        daysSincePeriodStart = days(dates(i) - periodStart);
+        
+        % Add these days to reference August 15
+        normalizedDates(i) = refAug15 + days(daysSincePeriodStart);
+    end
+    
+    % Verify normalization
+    if any(year(normalizedDates) > 2025) || any(year(normalizedDates) < 2024)
+        warning('Date normalization resulted in dates outside 2024-2025 range');
+    end
+end
+
+function yearColors = generateYearColors(numYears)
+    % Generate distinct colors for each year period
+    
+    if numYears == 1
+        yearColors = [0 0 1];  % Blue
+    elseif numYears == 2
+        yearColors = [0 0 1; 1 0 0];  % Blue, Red
+    elseif numYears == 3
+        yearColors = [0 0 1; 0 0.7 0; 1 0 0];  % Blue, Green, Red
+    elseif numYears == 4
+        yearColors = [0 0 1; 0 0.7 0; 1 0 0; 0.8 0 0.8];  % Blue, Green, Red, Purple
+    else
+        % Use colormap for more years
+        cmap = lines(numYears);
+        yearColors = cmap;
+    end
+end
+
+function formatYearOverYearPlotDaily(modalityName, style, plotHandles)
+    % Format year-over-year daily comparison plot
+    
+    % X-axis: show dates from Aug 15 to Aug 14
+    xlim([datetime(2024,8,15), datetime(2025,8,14)]);
+    
+    % Format x-axis to show months
+    ax = gca;
+    ax.XAxis.TickLabelFormat = 'MMM';
+    monthTicks = datetime(2024,8,15):calmonths(1):datetime(2025,8,14);
+    xticks(monthTicks);
+    
+    ylabel(['Daily ' modalityName], 'FontSize', style.labelFontSize, 'FontWeight', 'bold');
+    xlabel('Date', 'FontSize', style.labelFontSize);
+    
+    title(sprintf('Year-over-Year Daily %s Comparison', modalityName), ...
+        'FontSize', style.titleFontSize);
+    
+    subtitle('Corridor Average (Mean of Both Locations)', ...
+        'FontSize', style.axisFontSize, 'Color', [0.3 0.3 0.3]);
+    
+    set(gca, 'Color', style.axisBackgroundColor);
+    set(gca, 'FontSize', style.axisFontSize);
+    grid on;
+    
+    % Format y-axis with separators
+    ytick_positions = yticks;
+    ytick_labels = arrayfun(@(v) num2sepstr(v, '%.0f'), ytick_positions, 'UniformOutput', false);
+    yticklabels(ytick_labels);
+    
+    % Ensure y-axis starts at 0
+    ylim([0 max(ylim) * 1.1]);
+    
+    % Add legend
+    if ~isempty(plotHandles)
+        legend(plotHandles, 'Location', 'best', 'Color', style.axisBackgroundColor, ...
+            'FontSize', style.legendFontSize);
+    end
+end
+
+function formatYearOverYearPlotWeekly(modalityName, style, plotHandles)
+    % Format year-over-year weekly comparison plot
+    
+    % X-axis: show dates from Aug 15 to Aug 14
+    xlim([datetime(2024,8,11), datetime(2025,8,17)]); % Slightly wider to accommodate week starts
+    
+    % Format x-axis to show months
+    ax = gca;
+    ax.XAxis.TickLabelFormat = 'MMM';
+    monthTicks = datetime(2024,8,1):calmonths(1):datetime(2025,8,1);
+    xticks(monthTicks);
+    
+    % Add subtle vertical lines at month boundaries
+    for i = 1:length(monthTicks)
+        xline(monthTicks(i), ':', 'Color', [0.8 0.8 0.8], 'Alpha', 0.5);
+    end
+    
+    ylabel(['Weekly ' modalityName], 'FontSize', style.labelFontSize, 'FontWeight', 'bold');
+    xlabel('Week Starting', 'FontSize', style.labelFontSize);
+    
+    title(sprintf('Year-over-Year Weekly %s Comparison', modalityName), ...
+        'FontSize', style.titleFontSize);
+    
+    subtitle('Corridor Average (Mean of Both Locations)', ...
+        'FontSize', style.axisFontSize, 'Color', [0.3 0.3 0.3]);
+    
+    set(gca, 'Color', style.axisBackgroundColor);
+    set(gca, 'FontSize', style.axisFontSize);
+    grid on;
+    
+    % Format y-axis with separators
+    ytick_positions = yticks;
+    ytick_labels = arrayfun(@(v) num2sepstr(v, '%.0f'), ytick_positions, 'UniformOutput', false);
+    yticklabels(ytick_labels);
+    
+    % Ensure y-axis starts at 0
+    ylim([0 max(ylim) * 1.1]);
+    
+    % Add legend
+    if ~isempty(plotHandles)
+        legend(plotHandles, 'Location', 'best', 'Color', style.axisBackgroundColor, ...
+            'FontSize', style.legendFontSize);
+    end
+end
+
+function formatYearOverYearPlotMonthly(modalityName, style, plotHandles)
+    % Format year-over-year monthly comparison plot
+    
+    % X-axis: show months from Aug to Jul
+    monthDates = [datetime(2024,8:12,1), datetime(2025,1:7,1)];
+    xlim([monthDates(1) - days(15), monthDates(end) + days(15)]);
+    
+    % Set month ticks
+    xticks(monthDates);
+    monthNames = {'Aug', 'Sep', 'Oct', 'Nov', 'Dec', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul'};
+    xticklabels(monthNames);
+    
+    ylabel(['Monthly ' modalityName], 'FontSize', style.labelFontSize, 'FontWeight', 'bold');
+    xlabel('Month', 'FontSize', style.labelFontSize);
+    
+    title(sprintf('Year-over-Year Monthly %s Comparison', modalityName), ...
+        'FontSize', style.titleFontSize);
+    
+    subtitle('Corridor Average (Mean of Both Locations)', ...
+        'FontSize', style.axisFontSize, 'Color', [0.3 0.3 0.3]);
+    
+    set(gca, 'Color', style.axisBackgroundColor);
+    set(gca, 'FontSize', style.axisFontSize);
+    grid on;
+    
+    % Format y-axis with separators
+    ytick_positions = yticks;
+    ytick_labels = arrayfun(@(v) num2sepstr(v, '%.0f'), ytick_positions, 'UniformOutput', false);
+    yticklabels(ytick_labels);
+    
+    % Ensure y-axis starts at 0
+    ylim([0 max(ylim) * 1.1]);
+    
+    % Add legend
+    if ~isempty(plotHandles)
+        legend(plotHandles, 'Location', 'best', 'Color', style.axisBackgroundColor, ...
+            'FontSize', style.legendFontSize);
+    end
+end
+
+% Keep the corridor data calculation functions unchanged
+function dailyData = calculateCorridorDailyData(locationData, analysis)
+    % Calculate corridor average (average of two locations) for daily data
+    
+    locationNames = fieldnames(locationData);
+    
+    % Initialize combined data storage
+    allDates = [];
+    allCounts = [];
+    
+    % Process each location
+    for i = 1:length(locationNames)
+        locationName = locationNames{i};
+        data = locationData.(locationName);
+        
+        % Calculate daily totals for this location
+        locDailyData = calculateDailyTotals(data, analysis);
+        
+        if ~isempty(locDailyData.dates)
+            allDates = [allDates; locDailyData.dates];
+            allCounts = [allCounts; locDailyData.rawCounts];
+        end
+    end
+    
+    if isempty(allDates)
+        dailyData = struct('dates', [], 'counts', []);
+        return;
+    end
+    
+    % Group by date and calculate corridor average
+    dailyTable = table(allDates, allCounts, 'VariableNames', {'Date', 'Count'});
+    corridorDaily = groupsummary(dailyTable, 'Date', 'mean', 'Count');
+    
+    dailyData = struct();
+    dailyData.dates = corridorDaily.Date;
+    dailyData.counts = corridorDaily.mean_Count;
+end
+
+function weeklyData = calculateCorridorWeeklyData(locationData, analysis)
+    % Calculate corridor average for weekly data
+    
+    locationNames = fieldnames(locationData);
+    
+    % Initialize combined data storage
+    allWeekStarts = [];
+    allCounts = [];
+    
+    % Process each location
+    for i = 1:length(locationNames)
+        locationName = locationNames{i};
+        data = locationData.(locationName);
+        
+        % Calculate weekly totals for this location
+        locWeeklyData = calculateWeeklyTotals(data, analysis);
+        
+        if ~isempty(locWeeklyData.weekStarts)
+            allWeekStarts = [allWeekStarts; locWeeklyData.weekStarts];
+            allCounts = [allCounts; locWeeklyData.rawCounts];
+        end
+    end
+    
+    if isempty(allWeekStarts)
+        weeklyData = struct('weekStarts', [], 'counts', []);
+        return;
+    end
+    
+    % Group by week and calculate corridor average
+    weeklyTable = table(allWeekStarts, allCounts, 'VariableNames', {'WeekStart', 'Count'});
+    corridorWeekly = groupsummary(weeklyTable, 'WeekStart', 'mean', 'Count');
+    
+    weeklyData = struct();
+    weeklyData.weekStarts = corridorWeekly.WeekStart;
+    weeklyData.counts = corridorWeekly.mean_Count;
+end
+
+function monthlyData = calculateCorridorMonthlyData(locationData, analysis)
+    % Calculate corridor average for monthly data
+    
+    locationNames = fieldnames(locationData);
+    
+    % Initialize combined data storage
+    allMonthStarts = [];
+    allCounts = [];
+    
+    % Process each location
+    for i = 1:length(locationNames)
+        locationName = locationNames{i};
+        data = locationData.(locationName);
+        
+        % Calculate monthly totals for this location
+        locMonthlyData = calculateMonthlyTotals(data, analysis);
+        
+        if ~isempty(locMonthlyData.monthStarts)
+            allMonthStarts = [allMonthStarts; locMonthlyData.monthStarts];
+            allCounts = [allCounts; locMonthlyData.rawCounts];
+        end
+    end
+    
+    if isempty(allMonthStarts)
+        monthlyData = struct('monthStarts', [], 'counts', []);
+        return;
+    end
+    
+    % Group by month and calculate corridor average
+    monthlyTable = table(allMonthStarts, allCounts, 'VariableNames', {'MonthStart', 'Count'});
+    corridorMonthly = groupsummary(monthlyTable, 'MonthStart', 'mean', 'Count');
+    
+    monthlyData = struct();
+    monthlyData.monthStarts = corridorMonthly.MonthStart;
+    monthlyData.counts = corridorMonthly.mean_Count;
+end
