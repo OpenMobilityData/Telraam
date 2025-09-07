@@ -50,6 +50,7 @@ analysis = struct( ...
 );
 
 %dateSpan = 'winter';
+dateSpan = 'DecToFeb';
 %dateSpan = 'springSummer';
 %dateSpan = 'lastWeek';
 %dateSpan = 'lastMonth';
@@ -58,6 +59,9 @@ if exist('dateSpan', 'var')
     if strcmp(dateSpan,'winter')
         analysis.startTime = datetime(2024,11,16,00,00,01);
         analysis.endTime = datetime(2025,03,31,23,59,59);
+    elseif strcmp(dateSpan,'DecToFeb')
+        analysis.startTime = datetime(2024,12,01,00,00,01);
+        analysis.endTime = datetime(2025,02,28,23,59,59);
     elseif strcmp(dateSpan,'springSummer')
         analysis.startTime = datetime(2025,04,01,23,59,59);
     elseif strcmp(dateSpan,'lastWeek')
