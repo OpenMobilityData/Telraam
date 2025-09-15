@@ -20,7 +20,7 @@ locations = {
            'plotColor', [0 0 0]);  % Black
 };
 
-% locations = {locations{2}}; % Use to select a single location
+%locations = {locations{2}}; % Use to select a single location
 
 % Analysis parameters
 
@@ -31,7 +31,7 @@ modeString = 'Bike Total'; modeDisplayString = 'Bike Counts';
 
 analysis = struct( ...
     'startTime', datetime(2024,08,15,00,00,01), ...
-    'endTime', datetime(2025,09,05,23,59,59), ...
+    'endTime', datetime(2025,09,14,23,59,59), ...
     'modeString', modeString, ...
     'modeDisplayString', modeDisplayString, ...
     'uptimeThreshold', 0.0, ...
@@ -50,7 +50,7 @@ analysis = struct( ...
 );
 
 %dateSpan = 'winter';
-dateSpan = 'DecToFeb';
+%dateSpan = 'DecToFeb';
 %dateSpan = 'springSummer';
 %dateSpan = 'lastWeek';
 %dateSpan = 'lastMonth';
