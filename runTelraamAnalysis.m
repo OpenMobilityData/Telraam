@@ -31,7 +31,7 @@ modeString = 'Bike Total'; modeDisplayString = 'Bike Counts';
 
 analysis = struct( ...
     'startTime', datetime(2024,08,15,00,00,01), ...
-    'endTime', datetime(2025,09,14,23,59,59), ...
+    'endTime', datetime(2025,09,28,23,59,59), ...
     'modeString', modeString, ...
     'modeDisplayString', modeDisplayString, ...
     'uptimeThreshold', 0.0, ...
@@ -256,7 +256,10 @@ if multiModal.enabled
 end
 
 %% Generate Year-over-Year Comparison Plots
-plotYearOverYearComparisons(locationData, analysis, style);
+
+%locationTarget = westernSegmentName;
+locationTarget = easternSegmentName;
+plotYearOverYearComparisons(locationData, analysis, style, locationTarget);
 
 %% ======================== FUNCTIONS ========================
 
@@ -5441,10 +5444,53 @@ end
 
 %% Year-over-Year Comparison Functions
 
-function plotYearOverYearComparisons(locationData, analysis, style)
+%% Enhanced Year-over-Year Comparison Functions
+
+function plotYearOverYearComparisons(locationData, analysis, style, locationSpecifier)
     % Generate year-over-year comparison plots for all modalities and time scales
+    % 
+    % Inputs:
+    %   locationData - structure containing data for all locations
+    %   analysis - analysis configuration structure
+    %   style - plotting style configuration structure
+    %   locationSpecifier (optional) - string specifying which location to analyze:
+    %       - Omitted or empty: use corridor average (default)
+    %       - 'corridorAverage': explicitly use corridor average
+    %       - Location name (e.g., 'rue de Terrebonne @ King Edward'): analyze specific location
     
-    fprintf('\n=== Generating Year-over-Year Comparison Plots ===\n');
+    % Handle optional parameter
+    if nargin < 4
+        locationSpecifier = 'corridorAverage';
+    elseif isempty(locationSpecifier)
+        locationSpecifier = 'corridorAverage';
+    end
+    
+    % Validate location specifier
+    locationNames = fieldnames(locationData);
+    actualLocationNames = {};
+    for i = 1:length(locationNames)
+        actualLocationNames{i} = locationData.(locationNames{i}).locationInfo.name;
+    end
+    
+    isValidLocation = false;
+    if strcmpi(locationSpecifier, 'corridorAverage')
+        isValidLocation = true;
+        fprintf('\n=== Generating Year-over-Year Comparison Plots (Corridor Average) ===\n');
+    else
+        % Check if it's a valid location name
+        for i = 1:length(actualLocationNames)
+            if strcmpi(locationSpecifier, actualLocationNames{i})
+                isValidLocation = true;
+                fprintf('\n=== Generating Year-over-Year Comparison Plots for %s ===\n', locationSpecifier);
+                break;
+            end
+        end
+    end
+    
+    if ~isValidLocation
+        error('Invalid location specifier: "%s". Valid options are: "corridorAverage", %s', ...
+            locationSpecifier, strjoin(strcat('"', actualLocationNames, '"'), ', '));
+    end
     
     % Define modalities to analyze
     modalities = {
@@ -5463,26 +5509,32 @@ function plotYearOverYearComparisons(locationData, analysis, style)
         modalityAnalysis.modeDisplayString = modality.displayName;
         
         % Generate daily comparison
-        plotYearOverYearDaily(locationData, modalityAnalysis, style, modality);
+        plotYearOverYearDaily(locationData, modalityAnalysis, style, modality, locationSpecifier);
         
         % Generate weekly comparison
-        plotYearOverYearWeekly(locationData, modalityAnalysis, style, modality);
+        plotYearOverYearWeekly(locationData, modalityAnalysis, style, modality, locationSpecifier);
         
         % Generate monthly comparison
-        plotYearOverYearMonthly(locationData, modalityAnalysis, style, modality);
+        plotYearOverYearMonthly(locationData, modalityAnalysis, style, modality, locationSpecifier);
     end
     
     fprintf('Year-over-year comparison plots complete.\n\n');
 end
 
-function plotYearOverYearDaily(locationData, analysis, style, modality)
+function plotYearOverYearDaily(locationData, analysis, style, modality, locationSpecifier)
     % Plot daily traffic patterns overlaid by year
     
-    % Calculate corridor average daily data
-    dailyData = calculateCorridorDailyData(locationData, analysis);
+    % Calculate daily data based on location specifier
+    if strcmpi(locationSpecifier, 'corridorAverage')
+        dailyData = calculateCorridorDailyData(locationData, analysis);
+        locationLabel = 'Corridor Average';
+    else
+        dailyData = calculateLocationDailyData(locationData, analysis, locationSpecifier);
+        locationLabel = locationSpecifier;
+    end
     
     if isempty(dailyData.dates)
-        fprintf('No daily data available for %s\n', modality.displayName);
+        fprintf('No daily data available for %s at %s\n', modality.displayName, locationLabel);
         return;
     end
     
@@ -5490,7 +5542,8 @@ function plotYearOverYearDaily(locationData, analysis, style, modality)
     yearPeriods = separate12MonthPeriods(dailyData.dates, dailyData.counts, 'daily');
     
     if isempty(yearPeriods)
-        fprintf('Insufficient data for year-over-year daily comparison of %s\n', modality.displayName);
+        fprintf('Insufficient data for year-over-year daily comparison of %s at %s\n', ...
+            modality.displayName, locationLabel);
         return;
     end
     
@@ -5517,19 +5570,25 @@ function plotYearOverYearDaily(locationData, analysis, style, modality)
     end
     
     % Format plot
-    formatYearOverYearPlotDaily(modality.displayName, style, plotHandles);
+    formatYearOverYearPlotDaily(modality.displayName, style, plotHandles, locationLabel);
     
     hold off;
 end
 
-function plotYearOverYearWeekly(locationData, analysis, style, modality)
+function plotYearOverYearWeekly(locationData, analysis, style, modality, locationSpecifier)
     % Plot weekly traffic patterns overlaid by year
     
-    % Calculate corridor average weekly data
-    weeklyData = calculateCorridorWeeklyData(locationData, analysis);
+    % Calculate weekly data based on location specifier
+    if strcmpi(locationSpecifier, 'corridorAverage')
+        weeklyData = calculateCorridorWeeklyData(locationData, analysis);
+        locationLabel = 'Corridor Average';
+    else
+        weeklyData = calculateLocationWeeklyData(locationData, analysis, locationSpecifier);
+        locationLabel = locationSpecifier;
+    end
     
     if isempty(weeklyData.weekStarts)
-        fprintf('No weekly data available for %s\n', modality.displayName);
+        fprintf('No weekly data available for %s at %s\n', modality.displayName, locationLabel);
         return;
     end
     
@@ -5537,7 +5596,8 @@ function plotYearOverYearWeekly(locationData, analysis, style, modality)
     yearPeriods = separate12MonthPeriods(weeklyData.weekStarts, weeklyData.counts, 'weekly');
     
     if isempty(yearPeriods)
-        fprintf('Insufficient data for year-over-year weekly comparison of %s\n', modality.displayName);
+        fprintf('Insufficient data for year-over-year weekly comparison of %s at %s\n', ...
+            modality.displayName, locationLabel);
         return;
     end
     
@@ -5566,19 +5626,25 @@ function plotYearOverYearWeekly(locationData, analysis, style, modality)
     end
     
     % Format plot
-    formatYearOverYearPlotWeekly(modality.displayName, style, plotHandles);
+    formatYearOverYearPlotWeekly(modality.displayName, style, plotHandles, locationLabel);
     
     hold off;
 end
 
-function plotYearOverYearMonthly(locationData, analysis, style, modality)
+function plotYearOverYearMonthly(locationData, analysis, style, modality, locationSpecifier)
     % Plot monthly traffic patterns overlaid by year
     
-    % Calculate corridor average monthly data
-    monthlyData = calculateCorridorMonthlyData(locationData, analysis);
+    % Calculate monthly data based on location specifier
+    if strcmpi(locationSpecifier, 'corridorAverage')
+        monthlyData = calculateCorridorMonthlyData(locationData, analysis);
+        locationLabel = 'Corridor Average';
+    else
+        monthlyData = calculateLocationMonthlyData(locationData, analysis, locationSpecifier);
+        locationLabel = locationSpecifier;
+    end
     
     if isempty(monthlyData.monthStarts)
-        fprintf('No monthly data available for %s\n', modality.displayName);
+        fprintf('No monthly data available for %s at %s\n', modality.displayName, locationLabel);
         return;
     end
     
@@ -5586,7 +5652,8 @@ function plotYearOverYearMonthly(locationData, analysis, style, modality)
     yearPeriods = separate12MonthPeriods(monthlyData.monthStarts, monthlyData.counts, 'monthly');
     
     if isempty(yearPeriods)
-        fprintf('Insufficient data for year-over-year monthly comparison of %s\n', modality.displayName);
+        fprintf('Insufficient data for year-over-year monthly comparison of %s at %s\n', ...
+            modality.displayName, locationLabel);
         return;
     end
     
@@ -5615,9 +5682,232 @@ function plotYearOverYearMonthly(locationData, analysis, style, modality)
     end
     
     % Format plot
-    formatYearOverYearPlotMonthly(modality.displayName, style, plotHandles);
+    formatYearOverYearPlotMonthly(modality.displayName, style, plotHandles, locationLabel);
     
     hold off;
+end
+
+% New functions to calculate data for specific locations
+function dailyData = calculateLocationDailyData(locationData, analysis, locationName)
+    % Calculate daily data for a specific location
+    
+    % Find the location in the data structure
+    locationFieldName = [];
+    locationNames = fieldnames(locationData);
+    
+    for i = 1:length(locationNames)
+        if strcmpi(locationData.(locationNames{i}).locationInfo.name, locationName)
+            locationFieldName = locationNames{i};
+            break;
+        end
+    end
+    
+    if isempty(locationFieldName)
+        error('Location "%s" not found in data', locationName);
+    end
+    
+    % Calculate daily totals for this location
+    locDailyData = calculateDailyTotals(locationData.(locationFieldName), analysis);
+    
+    dailyData = struct();
+    dailyData.dates = locDailyData.dates;
+    dailyData.counts = locDailyData.rawCounts;
+end
+
+function weeklyData = calculateLocationWeeklyData(locationData, analysis, locationName)
+    % Calculate weekly data for a specific location
+    
+    % Find the location in the data structure
+    locationFieldName = [];
+    locationNames = fieldnames(locationData);
+    
+    for i = 1:length(locationNames)
+        if strcmpi(locationData.(locationNames{i}).locationInfo.name, locationName)
+            locationFieldName = locationNames{i};
+            break;
+        end
+    end
+    
+    if isempty(locationFieldName)
+        error('Location "%s" not found in data', locationName);
+    end
+    
+    % Calculate weekly totals for this location
+    locWeeklyData = calculateWeeklyTotals(locationData.(locationFieldName), analysis);
+    
+    weeklyData = struct();
+    weeklyData.weekStarts = locWeeklyData.weekStarts;
+    weeklyData.counts = locWeeklyData.rawCounts;
+end
+
+function monthlyData = calculateLocationMonthlyData(locationData, analysis, locationName)
+    % Calculate monthly data for a specific location
+    
+    % Find the location in the data structure
+    locationFieldName = [];
+    locationNames = fieldnames(locationData);
+    
+    for i = 1:length(locationNames)
+        if strcmpi(locationData.(locationNames{i}).locationInfo.name, locationName)
+            locationFieldName = locationNames{i};
+            break;
+        end
+    end
+    
+    if isempty(locationFieldName)
+        error('Location "%s" not found in data', locationName);
+    end
+    
+    % Calculate monthly totals for this location
+    locMonthlyData = calculateMonthlyTotals(locationData.(locationFieldName), analysis);
+    
+    monthlyData = struct();
+    monthlyData.monthStarts = locMonthlyData.monthStarts;
+    monthlyData.counts = locMonthlyData.rawCounts;
+end
+
+% Modified formatting functions to include location label
+function formatYearOverYearPlotDaily(modalityName, style, plotHandles, locationLabel)
+    % Format year-over-year daily comparison plot
+    
+    % X-axis: show dates from Aug 15 to Aug 14
+    xlim([datetime(2024,8,15), datetime(2025,8,14)]);
+    
+    % Format x-axis to show months
+    ax = gca;
+    ax.XAxis.TickLabelFormat = 'MMM';
+    monthTicks = datetime(2024,8,15):calmonths(1):datetime(2025,8,14);
+    xticks(monthTicks);
+    
+    ylabel(['Daily ' modalityName], 'FontSize', style.labelFontSize, 'FontWeight', 'bold');
+    xlabel('Date', 'FontSize', style.labelFontSize);
+    
+    title(sprintf('Year-over-Year Daily %s Comparison', modalityName), ...
+        'FontSize', style.titleFontSize);
+    
+    % Create subtitle based on location
+    if strcmpi(locationLabel, 'Corridor Average')
+        subtitle('Corridor Average (Mean of Both Locations)', ...
+            'FontSize', style.axisFontSize, 'Color', [0.3 0.3 0.3]);
+    else
+        subtitle(sprintf('Location: %s', locationLabel), ...
+            'FontSize', style.axisFontSize, 'Color', [0.3 0.3 0.3]);
+    end
+    
+    set(gca, 'Color', style.axisBackgroundColor);
+    set(gca, 'FontSize', style.axisFontSize);
+    grid on;
+    
+    % Format y-axis with separators
+    ytick_positions = yticks;
+    ytick_labels = arrayfun(@(v) num2sepstr(v, '%.0f'), ytick_positions, 'UniformOutput', false);
+    yticklabels(ytick_labels);
+    
+    % Ensure y-axis starts at 0
+    ylim([0 max(ylim) * 1.1]);
+    
+    % Add legend
+    if ~isempty(plotHandles)
+        legend(plotHandles, 'Location', 'best', 'Color', style.axisBackgroundColor, ...
+            'FontSize', style.legendFontSize);
+    end
+end
+
+function formatYearOverYearPlotWeekly(modalityName, style, plotHandles, locationLabel)
+    % Format year-over-year weekly comparison plot
+    
+    % X-axis: show dates from Aug 15 to Aug 14
+    xlim([datetime(2024,8,11), datetime(2025,8,17)]); % Slightly wider to accommodate week starts
+    
+    % Format x-axis to show months
+    ax = gca;
+    ax.XAxis.TickLabelFormat = 'MMM';
+    monthTicks = datetime(2024,8,1):calmonths(1):datetime(2025,8,1);
+    xticks(monthTicks);
+    
+    % Add subtle vertical lines at month boundaries
+    for i = 1:length(monthTicks)
+        xline(monthTicks(i), ':', 'Color', [0.8 0.8 0.8], 'Alpha', 0.5);
+    end
+    
+    ylabel(['Weekly ' modalityName], 'FontSize', style.labelFontSize, 'FontWeight', 'bold');
+    xlabel('Week Starting', 'FontSize', style.labelFontSize);
+    
+    title(sprintf('Year-over-Year Weekly %s Comparison', modalityName), ...
+        'FontSize', style.titleFontSize);
+    
+    % Create subtitle based on location
+    if strcmpi(locationLabel, 'Corridor Average')
+        subtitle('Corridor Average (Mean of Both Locations)', ...
+            'FontSize', style.axisFontSize, 'Color', [0.3 0.3 0.3]);
+    else
+        subtitle(sprintf('Location: %s', locationLabel), ...
+            'FontSize', style.axisFontSize, 'Color', [0.3 0.3 0.3]);
+    end
+    
+    set(gca, 'Color', style.axisBackgroundColor);
+    set(gca, 'FontSize', style.axisFontSize);
+    grid on;
+    
+    % Format y-axis with separators
+    ytick_positions = yticks;
+    ytick_labels = arrayfun(@(v) num2sepstr(v, '%.0f'), ytick_positions, 'UniformOutput', false);
+    yticklabels(ytick_labels);
+    
+    % Ensure y-axis starts at 0
+    ylim([0 max(ylim) * 1.1]);
+    
+    % Add legend
+    if ~isempty(plotHandles)
+        legend(plotHandles, 'Location', 'best', 'Color', style.axisBackgroundColor, ...
+            'FontSize', style.legendFontSize);
+    end
+end
+
+function formatYearOverYearPlotMonthly(modalityName, style, plotHandles, locationLabel)
+    % Format year-over-year monthly comparison plot
+    
+    % X-axis: show months from Aug to Jul
+    monthDates = [datetime(2024,8:12,1), datetime(2025,1:7,1)];
+    xlim([monthDates(1) - days(15), monthDates(end) + days(15)]);
+    
+    % Set month ticks
+    xticks(monthDates);
+    monthNames = {'Aug', 'Sep', 'Oct', 'Nov', 'Dec', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul'};
+    xticklabels(monthNames);
+    
+    ylabel(['Monthly ' modalityName], 'FontSize', style.labelFontSize, 'FontWeight', 'bold');
+    xlabel('Month', 'FontSize', style.labelFontSize);
+    
+    title(sprintf('Year-over-Year Monthly %s Comparison', modalityName), ...
+        'FontSize', style.titleFontSize);
+    
+    % Create subtitle based on location
+    if strcmpi(locationLabel, 'Corridor Average')
+        subtitle('Corridor Average (Mean of Both Locations)', ...
+            'FontSize', style.axisFontSize, 'Color', [0.3 0.3 0.3]);
+    else
+        subtitle(sprintf('Location: %s', locationLabel), ...
+            'FontSize', style.axisFontSize, 'Color', [0.3 0.3 0.3]);
+    end
+    
+    set(gca, 'Color', style.axisBackgroundColor);
+    set(gca, 'FontSize', style.axisFontSize);
+    grid on;
+    
+    % Format y-axis with separators
+    ytick_positions = yticks;
+    ytick_labels = arrayfun(@(v) num2sepstr(v, '%.0f'), ytick_positions, 'UniformOutput', false);
+    yticklabels(ytick_labels);
+    
+    % Ensure y-axis starts at 0
+    ylim([0 max(ylim) * 1.1]);
+    
+    % Add legend
+    if ~isempty(plotHandles)
+        legend(plotHandles, 'Location', 'best', 'Color', style.axisBackgroundColor, ...
+            'FontSize', style.legendFontSize);
+    end
 end
 
 function yearPeriods = separate12MonthPeriods(dates, counts, aggregationType)
@@ -5754,131 +6044,6 @@ function yearColors = generateYearColors(numYears)
         % Use colormap for more years
         cmap = lines(numYears);
         yearColors = cmap;
-    end
-end
-
-function formatYearOverYearPlotDaily(modalityName, style, plotHandles)
-    % Format year-over-year daily comparison plot
-    
-    % X-axis: show dates from Aug 15 to Aug 14
-    xlim([datetime(2024,8,15), datetime(2025,8,14)]);
-    
-    % Format x-axis to show months
-    ax = gca;
-    ax.XAxis.TickLabelFormat = 'MMM';
-    monthTicks = datetime(2024,8,15):calmonths(1):datetime(2025,8,14);
-    xticks(monthTicks);
-    
-    ylabel(['Daily ' modalityName], 'FontSize', style.labelFontSize, 'FontWeight', 'bold');
-    xlabel('Date', 'FontSize', style.labelFontSize);
-    
-    title(sprintf('Year-over-Year Daily %s Comparison', modalityName), ...
-        'FontSize', style.titleFontSize);
-    
-    subtitle('Corridor Average (Mean of Both Locations)', ...
-        'FontSize', style.axisFontSize, 'Color', [0.3 0.3 0.3]);
-    
-    set(gca, 'Color', style.axisBackgroundColor);
-    set(gca, 'FontSize', style.axisFontSize);
-    grid on;
-    
-    % Format y-axis with separators
-    ytick_positions = yticks;
-    ytick_labels = arrayfun(@(v) num2sepstr(v, '%.0f'), ytick_positions, 'UniformOutput', false);
-    yticklabels(ytick_labels);
-    
-    % Ensure y-axis starts at 0
-    ylim([0 max(ylim) * 1.1]);
-    
-    % Add legend
-    if ~isempty(plotHandles)
-        legend(plotHandles, 'Location', 'best', 'Color', style.axisBackgroundColor, ...
-            'FontSize', style.legendFontSize);
-    end
-end
-
-function formatYearOverYearPlotWeekly(modalityName, style, plotHandles)
-    % Format year-over-year weekly comparison plot
-    
-    % X-axis: show dates from Aug 15 to Aug 14
-    xlim([datetime(2024,8,11), datetime(2025,8,17)]); % Slightly wider to accommodate week starts
-    
-    % Format x-axis to show months
-    ax = gca;
-    ax.XAxis.TickLabelFormat = 'MMM';
-    monthTicks = datetime(2024,8,1):calmonths(1):datetime(2025,8,1);
-    xticks(monthTicks);
-    
-    % Add subtle vertical lines at month boundaries
-    for i = 1:length(monthTicks)
-        xline(monthTicks(i), ':', 'Color', [0.8 0.8 0.8], 'Alpha', 0.5);
-    end
-    
-    ylabel(['Weekly ' modalityName], 'FontSize', style.labelFontSize, 'FontWeight', 'bold');
-    xlabel('Week Starting', 'FontSize', style.labelFontSize);
-    
-    title(sprintf('Year-over-Year Weekly %s Comparison', modalityName), ...
-        'FontSize', style.titleFontSize);
-    
-    subtitle('Corridor Average (Mean of Both Locations)', ...
-        'FontSize', style.axisFontSize, 'Color', [0.3 0.3 0.3]);
-    
-    set(gca, 'Color', style.axisBackgroundColor);
-    set(gca, 'FontSize', style.axisFontSize);
-    grid on;
-    
-    % Format y-axis with separators
-    ytick_positions = yticks;
-    ytick_labels = arrayfun(@(v) num2sepstr(v, '%.0f'), ytick_positions, 'UniformOutput', false);
-    yticklabels(ytick_labels);
-    
-    % Ensure y-axis starts at 0
-    ylim([0 max(ylim) * 1.1]);
-    
-    % Add legend
-    if ~isempty(plotHandles)
-        legend(plotHandles, 'Location', 'best', 'Color', style.axisBackgroundColor, ...
-            'FontSize', style.legendFontSize);
-    end
-end
-
-function formatYearOverYearPlotMonthly(modalityName, style, plotHandles)
-    % Format year-over-year monthly comparison plot
-    
-    % X-axis: show months from Aug to Jul
-    monthDates = [datetime(2024,8:12,1), datetime(2025,1:7,1)];
-    xlim([monthDates(1) - days(15), monthDates(end) + days(15)]);
-    
-    % Set month ticks
-    xticks(monthDates);
-    monthNames = {'Aug', 'Sep', 'Oct', 'Nov', 'Dec', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul'};
-    xticklabels(monthNames);
-    
-    ylabel(['Monthly ' modalityName], 'FontSize', style.labelFontSize, 'FontWeight', 'bold');
-    xlabel('Month', 'FontSize', style.labelFontSize);
-    
-    title(sprintf('Year-over-Year Monthly %s Comparison', modalityName), ...
-        'FontSize', style.titleFontSize);
-    
-    subtitle('Corridor Average (Mean of Both Locations)', ...
-        'FontSize', style.axisFontSize, 'Color', [0.3 0.3 0.3]);
-    
-    set(gca, 'Color', style.axisBackgroundColor);
-    set(gca, 'FontSize', style.axisFontSize);
-    grid on;
-    
-    % Format y-axis with separators
-    ytick_positions = yticks;
-    ytick_labels = arrayfun(@(v) num2sepstr(v, '%.0f'), ytick_positions, 'UniformOutput', false);
-    yticklabels(ytick_labels);
-    
-    % Ensure y-axis starts at 0
-    ylim([0 max(ylim) * 1.1]);
-    
-    % Add legend
-    if ~isempty(plotHandles)
-        legend(plotHandles, 'Location', 'best', 'Color', style.axisBackgroundColor, ...
-            'FontSize', style.legendFontSize);
     end
 end
 
