@@ -31,7 +31,7 @@ modeString = 'Bike Total'; modeDisplayString = 'Bike Counts';
 
 analysis = struct( ...
     'startTime', datetime(2024,08,15,00,00,01), ...
-    'endTime', datetime(2025,09,28,23,59,59), ...
+    'endTime', datetime(2025,10,05,23,59,59), ...
     'modeString', modeString, ...
     'modeDisplayString', modeDisplayString, ...
     'uptimeThreshold', 0.0, ...
@@ -54,6 +54,7 @@ analysis = struct( ...
 %dateSpan = 'springSummer';
 %dateSpan = 'lastWeek';
 %dateSpan = 'lastMonth';
+%dateSpan = 'September2025';
 
 if exist('dateSpan', 'var')
     if strcmp(dateSpan,'winter')
@@ -68,6 +69,9 @@ if exist('dateSpan', 'var')
         analysis.startTime = analysis.endTime - days(7) + seconds(2);
     elseif strcmp(dateSpan,'lastMonth')
         analysis.startTime = dateshift(analysis.endTime,'start','month') + seconds(2);
+    elseif strcmp(dateSpan,'September2025')
+        analysis.startTime = datetime(2025,09,01,00,00,01);
+        analysis.endTime = datetime(2025,09,31,23,59,59);
     end
 end
 
@@ -257,8 +261,8 @@ end
 
 %% Generate Year-over-Year Comparison Plots
 
-%locationTarget = westernSegmentName;
-locationTarget = easternSegmentName;
+locationTarget = westernSegmentName;
+%locationTarget = easternSegmentName;
 plotYearOverYearComparisons(locationData, analysis, style, locationTarget);
 
 %% ======================== FUNCTIONS ========================
