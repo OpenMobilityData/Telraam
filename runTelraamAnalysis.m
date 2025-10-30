@@ -24,14 +24,14 @@ locations = {
 
 % Analysis parameters
 
-modeString = 'Bike Total'; modeDisplayString = 'Bike Counts';
-%modeString = 'Pedestrian Total'; modeDisplayString = 'Pedestrian Counts';
+%modeString = 'Bike Total'; modeDisplayString = 'Bike Counts';
+modeString = 'Pedestrian Total'; modeDisplayString = 'Pedestrian Counts';
 %modeString = 'Car Total'; modeDisplayString = 'Car Counts';
 %modeString = 'Large vehicle Total'; modeDisplayString = 'Heavy Truck Counts';
 
 analysis = struct( ...
     'startTime', datetime(2024,08,15,00,00,01), ...
-    'endTime', datetime(2025,10,05,23,59,59), ...
+    'endTime', datetime(2025,10,26,23,59,59), ...
     'modeString', modeString, ...
     'modeDisplayString', modeDisplayString, ...
     'uptimeThreshold', 0.0, ...
@@ -262,7 +262,9 @@ end
 %% Generate Year-over-Year Comparison Plots
 
 locationTarget = westernSegmentName;
-%locationTarget = easternSegmentName;
+plotYearOverYearComparisons(locationData, analysis, style, locationTarget);
+
+locationTarget = easternSegmentName;
 plotYearOverYearComparisons(locationData, analysis, style, locationTarget);
 
 %% ======================== FUNCTIONS ========================
