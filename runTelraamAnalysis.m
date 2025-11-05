@@ -24,14 +24,14 @@ locations = {
 
 % Analysis parameters
 
-%modeString = 'Bike Total'; modeDisplayString = 'Bike Counts';
-modeString = 'Pedestrian Total'; modeDisplayString = 'Pedestrian Counts';
+modeString = 'Bike Total'; modeDisplayString = 'Bike Counts';
+%modeString = 'Pedestrian Total'; modeDisplayString = 'Pedestrian Counts';
 %modeString = 'Car Total'; modeDisplayString = 'Car Counts';
 %modeString = 'Large vehicle Total'; modeDisplayString = 'Heavy Truck Counts';
 
 analysis = struct( ...
     'startTime', datetime(2024,08,15,00,00,01), ...
-    'endTime', datetime(2025,10,26,23,59,59), ...
+    'endTime', datetime(2025,10,31,23,59,59), ...
     'modeString', modeString, ...
     'modeDisplayString', modeDisplayString, ...
     'uptimeThreshold', 0.0, ...
@@ -49,12 +49,14 @@ analysis = struct( ...
     ) ...
 );
 
-%dateSpan = 'winter';
+dateSpan = 'winter';
 %dateSpan = 'DecToFeb';
 %dateSpan = 'springSummer';
 %dateSpan = 'lastWeek';
 %dateSpan = 'lastMonth';
 %dateSpan = 'September2025';
+%dateSpan = 'fullMonthsWest';
+%dateSpan = 'fullMonthsEast';
 
 if exist('dateSpan', 'var')
     if strcmp(dateSpan,'winter')
@@ -72,6 +74,10 @@ if exist('dateSpan', 'var')
     elseif strcmp(dateSpan,'September2025')
         analysis.startTime = datetime(2025,09,01,00,00,01);
         analysis.endTime = datetime(2025,09,31,23,59,59);
+    elseif strcmp(dateSpan,'fullMonthsWest')
+        analysis.startTime = datetime(2024,09,01,00,00,01);
+    elseif strcmp(dateSpan,'fullMonthsEast')
+        analysis.startTime = datetime(2024,10,01,00,00,01);
     end
 end
 
@@ -376,7 +382,7 @@ function inputTable = applyDaylightCorrections(inputTable, analysis)
 end
 
 function plotCombinedDaily(locationData, weatherData, analysis, plots, style)
-    figure('Position', [408 126 1132 921]);
+    figure('Name', [analysis.modeDisplayString ' - Daily'], 'NumberTitle', 'off', 'Position', [408 126 1132 921]);
     
     locationNames = fieldnames(locationData);
     plotHandles = [];
@@ -671,7 +677,7 @@ function out = num2sepstr(numin, format, sep)
 end
 
 function plotCombinedWeekly(locationData, weatherData, analysis, plots, style)
-    figure('Position', [408 126 1132 921]);
+    figure('Name', [analysis.modeDisplayString ' - Weekly'], 'NumberTitle', 'off', 'Position', [408 126 1132 921]);
     
     locationNames = fieldnames(locationData);
     plotHandles = [];
@@ -892,7 +898,7 @@ function plotCombinedMonthly(locationData, weatherData, analysis, plots, style)
         return;
     end
 
-    figure('Position', [408 126 1132 921]);
+    figure('Name', [analysis.modeDisplayString ' - Monthly'], 'NumberTitle', 'off', 'Position', [408 126 1132 921]);
     
     locationNames = fieldnames(locationData);
     plotHandles = [];
@@ -1186,7 +1192,7 @@ function formatCombinedMonthlyPlot(analysis, plots, style, weatherData)
 end
 
 function plotMultiModalDaily(locationData, weatherData, analysis, plots, style, multiModal)
-    figure('Position', [408 126 1132 921]);
+    figure('Name', 'Multi-Modal - Daily', 'NumberTitle', 'off', 'Position', [408 126 1132 921]);
     
     plotHandles = [];
     
@@ -1253,7 +1259,7 @@ function plotMultiModalDaily(locationData, weatherData, analysis, plots, style, 
 end
 
 function plotMultiModalWeekly(locationData, weatherData, analysis, plots, style, multiModal)
-    figure('Position', [408 126 1132 921]);
+    figure('Name', 'Multi-Modal - Weekly', 'NumberTitle', 'off', 'Position', [408 126 1132 921]);
     
     plotHandles = [];
     
@@ -1347,7 +1353,7 @@ function plotMultiModalMonthly(locationData, weatherData, analysis, plots, style
         return;
     end
 
-    figure('Position', [408 126 1132 921]);
+    figure('Name', 'Multi-Modal - Monthly', 'NumberTitle', 'off', 'Position', [408 126 1132 921]);
     
     plotHandles = [];
     
@@ -1591,7 +1597,7 @@ end
 function plotGrandAverageHourly(hourlyData, analysis, style, locationName)
     % Plot the grand average hourly patterns (original functionality)
     
-    figure('Position', [408 126 1132 921]);
+    figure('Name', [analysis.modeDisplayString ' - Hourly Avg - ' locationName], 'NumberTitle', 'off', 'Position', [408 126 1132 921]);
     hold on
     
     plotHandles = [];
@@ -1720,7 +1726,7 @@ end
 function plotMonthlyHourlyPatterns(monthlyHourlyData, analysis, style, locationName, dayType)
     % Plot hourly patterns segregated by month
     
-    figure('Position', [408 126 1132 921]);
+    figure('Name', [analysis.modeDisplayString ' - Hourly by Month - ' dayType ' - ' locationName], 'NumberTitle', 'off', 'Position', [408 126 1132 921]);
     hold on
     
     plotHandles = [];
@@ -2288,7 +2294,7 @@ end
 function plotMonthlyDayOfWeekPatterns(dayOfWeekData, analysis, style, locationName)
     % Plot day-of-week patterns segregated by month
     
-    figure('Position', [408 126 1132 921]);
+    figure('Name', [analysis.modeDisplayString ' - Day of Week by Month - ' locationName], 'NumberTitle', 'off', 'Position', [408 126 1132 921]);
     hold on
     
     plotHandles = [];
@@ -2348,7 +2354,7 @@ end
 function plotGrandAverageDayOfWeek(dayOfWeekData, analysis, style, locationName)
     % Plot the grand average day-of-week pattern
     
-    figure('Position', [408 126 1132 921]);
+    figure('Name', [analysis.modeDisplayString ' - Day of Week Avg - ' locationName], 'NumberTitle', 'off', 'Position', [408 126 1132 921]);
     hold on
     
     plotHandles = [];
@@ -2412,7 +2418,7 @@ end
 function plotTemperatureScatter(locationData, weatherData, analysis, plots, style)
     % Plot scatter plot of daily counts versus air temperature for all locations
     
-    figure('Position', [408 126 1132 921]);
+    figure('Name', [analysis.modeDisplayString ' vs Temp - Daily'], 'NumberTitle', 'off', 'Position', [408 126 1132 921]);
     hold on
     
     locationNames = fieldnames(locationData);
@@ -2605,7 +2611,7 @@ function plotTemperatureScatterSeasonal(locationData, weatherData, analysis, plo
     % Alternative version: Plot with seasonal color coding
     % Call this instead of plotTemperatureScatter if you want seasonal analysis
     
-    figure('Position', [408 126 1132 921]);
+    figure('Name', [analysis.modeDisplayString ' vs Temp - Seasonal'], 'NumberTitle', 'off', 'Position', [408 126 1132 921]);
     hold on
     
     locationNames = fieldnames(locationData);
@@ -2799,11 +2805,11 @@ function plotModalityPieCharts(locationData, analysis, style)
     % Create subplot layout - one pie chart per location
     numLocations = length(locationNames);
     if numLocations == 1
-        figure('Position', [408 126 600 600]);
+        figure('Name', 'Modal Split - Pie Charts', 'NumberTitle', 'off', 'Position', [408 126 600 600]);
     elseif numLocations == 2
-        figure('Position', [408 126 1200 600]);
+        figure('Name', 'Modal Split - Pie Charts', 'NumberTitle', 'off', 'Position', [408 126 1200 600]);
     else
-        figure('Position', [408 126 1200 800]);
+        figure('Name', 'Modal Split - Pie Charts', 'NumberTitle', 'off', 'Position', [408 126 1200 800]);
     end
     
     for i = 1:numLocations
@@ -2938,7 +2944,7 @@ end
 function plotModalityPieChartsComparative(locationData, analysis, style)
     % Alternative version: Create a single comparative pie chart showing all locations
     
-    figure('Position', [408 126 800 600]);
+    figure('Name', 'Modal Split - Combined Pie', 'NumberTitle', 'off', 'Position', [408 126 800 600]);
     
     locationNames = fieldnames(locationData);
     modalityInfo = getModalityInfo();
@@ -3018,7 +3024,7 @@ end
 function plotModalityBarChart(locationData, analysis, style)
     % Alternative visualization: Stacked bar chart instead of pie charts
     
-    figure('Position', [408 126 1000 600]);
+    figure('Name', 'Modal Split - Bar Chart', 'NumberTitle', 'off', 'Position', [408 126 1000 600]);
     
     locationNames = fieldnames(locationData);
     modalityInfo = getModalityInfo();
@@ -3099,7 +3105,7 @@ end
 function plotCombinedHourlyRaw(locationData, weatherData, analysis, plots, style)
     % Plot raw hourly counts as scatter points for all locations
     
-    figure('Position', [408 126 1400 921]);  % Wider figure for dense time data
+    figure('Name', [analysis.modeDisplayString ' - Hourly Raw'], 'NumberTitle', 'off', 'Position', [408 126 1400 921]);  % Wider figure for dense time data
     
     locationNames = fieldnames(locationData);
     plotHandles = [];
@@ -3287,7 +3293,7 @@ end
 function plotMultiModalHourlyRaw(locationData, weatherData, analysis, plots, style, multiModal)
     % Plot hourly raw counts for multiple modes at a single location
     
-    figure('Position', [408 126 1400 921]);
+    figure('Name', 'Multi-Modal - Hourly Raw', 'NumberTitle', 'off', 'Position', [408 126 1400 921]);
     
     plotHandles = [];
     
@@ -3603,7 +3609,7 @@ function demonstrateFilterEffect(originalData, filteredData, analysis)
     % Optional function to visualize the effect of night filtering
     % This can be called to show before/after comparison
     
-    figure('Position', [408 126 1200 800]);
+    figure('Name', 'Night Filter Effect', 'NumberTitle', 'off', 'Position', [408 126 1200 800]);
     
     % Create subplots for comparison
     subplot(2, 1, 1);
@@ -3647,7 +3653,7 @@ end
 function plotHourlyCountHistogram(locationData, analysis, style)
     % Plot histogram of hourly counts for all locations on the same axes
     
-    figure('Position', [408 126 1000 700]);
+    figure('Name', [analysis.modeDisplayString ' - Hourly Histogram'], 'NumberTitle', 'off', 'Position', [408 126 1000 700]);
     hold on
     
     locationNames = fieldnames(locationData);
@@ -3726,7 +3732,7 @@ end
 function plotHourlyCountHistogramNormalized(locationData, analysis, style)
     % Alternative version: Normalized histograms for better comparison when sample sizes differ
     
-    figure('Position', [408 126 1000 700]);
+    figure('Name', [analysis.modeDisplayString ' - Hourly Histogram Normalized'], 'NumberTitle', 'off', 'Position', [408 126 1000 700]);
     hold on
     
     locationNames = fieldnames(locationData);
@@ -3856,7 +3862,7 @@ end
 function plotHourlyCountHistogramOverlay(locationData, analysis, style)
     % Alternative version: Overlay with transparency (good for similar distributions)
     
-    figure('Position', [408 126 1000 700]);
+    figure('Name', [analysis.modeDisplayString ' - Hourly Histogram Overlay'], 'NumberTitle', 'off', 'Position', [408 126 1000 700]);
     hold on
     
     locationNames = fieldnames(locationData);
@@ -4118,7 +4124,7 @@ end
 function plotZeroIntervalAnalysis(locationData, analysis, style)
     % Optional: Create visualization of zero intervals
     
-    figure('Position', [408 126 1200 800]);
+    figure('Name', [analysis.modeDisplayString ' - Zero Intervals'], 'NumberTitle', 'off', 'Position', [408 126 1200 800]);
     
     locationNames = fieldnames(locationData);
     numLocations = length(locationNames);
@@ -4189,7 +4195,7 @@ function plotTemperatureScatterWeekly(locationData, weatherData, analysis, plots
     % Plot scatter plot of weekly counts versus average weekly air temperature for all locations
     % This is the weekly equivalent of plotTemperatureScatter()
     
-    figure('Position', [408 126 1132 921]);
+    figure('Name', [analysis.modeDisplayString ' vs Temp - Weekly'], 'NumberTitle', 'off', 'Position', [408 126 1132 921]);
     hold on
     
     locationNames = fieldnames(locationData);
@@ -4462,7 +4468,7 @@ function plotLocationCorrelation(locationData, analysis, plots, style, aggregati
     end
     
     % Create the figure
-    figure('Position', [408 126 1132 921]);
+    figure('Name', [analysis.modeDisplayString ' - Location Correlation - ' titleSuffix], 'NumberTitle', 'off', 'Position', [408 126 1132 921]);
     
     % Calculate correlation statistics
     [corrStats, trendStats] = calculateCorrelationStats(counts1, counts2);
@@ -4846,7 +4852,7 @@ function plotBikeModalityCorrelation(locationData, analysis, plots, style)
         currentMode = comparisonModes{modeIdx};
         
         % Create figure for this mode comparison
-        figure('Position', [408 126 1132 921]);
+        figure('Name', ['Bikes vs ' currentMode.shortName ' - Weekly Correlation'], 'NumberTitle', 'off', 'Position', [408 126 1132 921]);
         hold on;
         
         plotHandles = [];
@@ -5195,7 +5201,7 @@ function plotVisibilityScatterWeekly(locationData, weatherData, analysis, plots,
     % Plot scatter plot of weekly counts versus average weekly visibility for all locations
     % This is the weekly equivalent of plotTemperatureScatterWeekly() but for visibility
     
-    figure('Position', [408 126 1132 921]);
+    figure('Name', [analysis.modeDisplayString ' vs Visibility - Weekly'], 'NumberTitle', 'off', 'Position', [408 126 1132 921]);
     hold on
     
     locationNames = fieldnames(locationData);
@@ -5554,7 +5560,7 @@ function plotYearOverYearDaily(locationData, analysis, style, modality, location
     end
     
     % Create figure
-    figure('Position', [408 126 1132 921]);
+    figure('Name', [modality.displayName ' - Year-over-Year Daily'], 'NumberTitle', 'off', 'Position', [408 126 1132 921]);
     hold on;
     
     % Generate colors for each year period
@@ -5608,7 +5614,7 @@ function plotYearOverYearWeekly(locationData, analysis, style, modality, locatio
     end
     
     % Create figure
-    figure('Position', [408 126 1132 921]);
+    figure('Name', [modality.displayName ' - Year-over-Year Weekly'], 'NumberTitle', 'off', 'Position', [408 126 1132 921]);
     hold on;
     
     % Generate colors for each year period
@@ -5664,7 +5670,7 @@ function plotYearOverYearMonthly(locationData, analysis, style, modality, locati
     end
     
     % Create figure
-    figure('Position', [408 126 1132 921]);
+    figure('Name', [modality.displayName ' - Year-over-Year Monthly'], 'NumberTitle', 'off', 'Position', [408 126 1132 921]);
     hold on;
     
     % Generate colors for each year period
