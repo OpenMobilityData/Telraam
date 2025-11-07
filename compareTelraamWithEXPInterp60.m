@@ -51,6 +51,16 @@ expStudyData.cars.counts = struct( ...
     'Eastern', struct('AM', 321, 'PM', 264, 'Total', 585) ...
 );
 
+% Add 2022 actual car counts (before road reconfiguration)
+expStudyData.cars.counts2022 = struct( ...
+    'Western', struct( ...
+        'OneWay_AM', 50, 'OneWay_PM', 56, 'OneWay_Total', 106, ...
+        'TwoWay_AM', 170, 'TwoWay_PM', 166, 'TwoWay_Total', 336), ...
+    'Eastern', struct( ...
+        'OneWay_AM', 306, 'OneWay_PM', 228, 'OneWay_Total', 534, ...
+        'TwoWay_AM', 441, 'TwoWay_PM', 426, 'TwoWay_Total', 867) ...
+);
+
 % Analysis parameters
 analysis = struct( ...
     'startTime', datetime(2024, 08, 15, 00, 00, 01), ...
@@ -218,52 +228,111 @@ function plotYearOverYearWithEXP(locationData, location, modality, timeperiod, e
     fig = figure('Position', [100, 100, 1200, 600]);
     hold on;
     
-    % Plot each year period
+    % Initialize legend entries array
     legendEntries = {};
+    
+    % 1. First plot Telraam year periods (actual data)
     for i = 1:length(yearPeriods)
         period = yearPeriods(i);
         color = getYearColor(i);
         
+        % Update label to include "Telraam" prefix
+        displayLabel = sprintf('Telraam %s', period.label);
+        
         plot(period.normalizedDates, period.counts, '-', ...
             'Color', color, 'LineWidth', style.plotLineWidth, ...
-            'DisplayName', period.label);
-        legendEntries{end+1} = period.label;
+            'DisplayName', displayLabel);
+        legendEntries{end+1} = displayLabel;
     end
     
-    % Add EXP Study reference line
-    xlims = xlim;
-    plot(xlims, [expCount, expCount], '--', ...
-        'Color', style.expLineColor, 'LineWidth', 2, ...
-        'DisplayName', sprintf('EXP Count (%d)', expCount));
-    legendEntries{end+1} = sprintf('EXP Count (%d)', expCount);
+    xlims = xlim;  % Get x-axis limits after plotting data
     
-    % Add marker on EXP Study date
+    % Get normalized EXP study date for markers
     aug15_2024 = datetime(2024, 8, 15);
     expStudyNormalized = normalizeToReferenceYear(expStudyDate, aug15_2024);
+    markerSize = 10;  % Increased marker size for visibility
+    
+    % 2. Add EXP Study reference lines
+    if strcmp(modality.displayName, 'Bikes')
+        % For bikes: EXP provided actual counts from 2022, not projections
+        expLabel = sprintf('EXP Count 2022 (%d)', expCount);
+    else
+        % For cars: EXP provided model projections for the new configuration
+        expLabel = sprintf('EXP Projection (%d)', expCount);
+    end
+    
+    % Use consistent color for EXP line across all plots
+    expLineColor = [0.2 0.2 0.2];  % Dark gray for all EXP primary lines
+    
+    plot(xlims, [expCount, expCount], '--', ...
+        'Color', expLineColor, 'LineWidth', 2, ...
+        'DisplayName', expLabel);
+    legendEntries{end+1} = expLabel;
+    
+    % Add marker for main EXP line
     plot(expStudyNormalized, expCount, 'o', ...
-        'MarkerSize', style.markerSize, ...
-        'MarkerEdgeColor', style.expLineColor, ...
-        'MarkerFaceColor', style.expLineColor, ...
+        'MarkerSize', markerSize, ...
+        'MarkerEdgeColor', expLineColor, ...
+        'MarkerFaceColor', expLineColor, ...
         'HandleVisibility', 'off');
     
-    % Calculate and add mean line for full year
+    % 3. Add 2022 benchmark lines for cars only (in correct order)
+    if strcmp(modality.displayName, 'Cars')
+        % Get the 2022 counts based on time period
+        if strcmp(timeperiod, 'AM')
+            oneWay2022 = modality.expData.counts2022.(location.shortName).OneWay_AM;
+            twoWay2022 = modality.expData.counts2022.(location.shortName).TwoWay_AM;
+        elseif strcmp(timeperiod, 'PM')
+            oneWay2022 = modality.expData.counts2022.(location.shortName).OneWay_PM;
+            twoWay2022 = modality.expData.counts2022.(location.shortName).TwoWay_PM;
+        else % Combined
+            oneWay2022 = modality.expData.counts2022.(location.shortName).OneWay_Total;
+            twoWay2022 = modality.expData.counts2022.(location.shortName).TwoWay_Total;
+        end
+        
+        % Plot Two-Way 2022 line (first)
+        plot(xlims, [twoWay2022, twoWay2022], '-.', ...
+            'Color', [0.6 0.2 0.6], 'LineWidth', 1.5, ...  % Dark purple
+            'DisplayName', sprintf('EXP Two-Way 2022 (%d)', twoWay2022));
+        legendEntries{end+1} = sprintf('EXP Two-Way 2022 (%d)', twoWay2022);
+        
+        % Add marker for Two-Way 2022
+        plot(expStudyNormalized, twoWay2022, 'o', ...
+            'MarkerSize', markerSize, ...
+            'MarkerEdgeColor', [0.6 0.2 0.6], ...
+            'MarkerFaceColor', [0.6 0.2 0.6], ...
+            'HandleVisibility', 'off');
+        
+        % Plot One-Way 2022 line (second)
+        plot(xlims, [oneWay2022, oneWay2022], '-.', ...
+            'Color', [0.2 0.6 0.2], 'LineWidth', 1.5, ...  % Dark green
+            'DisplayName', sprintf('EXP One-Way 2022 (%d)', oneWay2022));
+        legendEntries{end+1} = sprintf('EXP One-Way 2022 (%d)', oneWay2022);
+        
+        % Add marker for One-Way 2022
+        plot(expStudyNormalized, oneWay2022, 'o', ...
+            'MarkerSize', markerSize, ...
+            'MarkerEdgeColor', [0.2 0.6 0.2], ...
+            'MarkerFaceColor', [0.2 0.6 0.2], ...
+            'HandleVisibility', 'off');
+    end
+    
+    % 4. Calculate and add mean lines (last in order)
+    % Mean Telraam All
     meanCount = mean(dailyData.counts, 'omitnan');
     plot(xlims, [meanCount, meanCount], '--', ...
         'Color', style.meanLineColor, 'LineWidth', 2, ...
-        'DisplayName', sprintf('Year Mean (%.1f)', meanCount));
-    legendEntries{end+1} = sprintf('Year Mean (%.1f)', meanCount);
+        'DisplayName', sprintf('Mean Telraam All (%.1f)', meanCount));
+    legendEntries{end+1} = sprintf('Mean Telraam All (%.1f)', meanCount);
     
-    % Calculate and add mean line for April 1 - November 15
-    % Find dates in the April-November period across all years
+    % Mean Telraam Apr 1 - Nov 15
     aprNovDates = [];
     aprNovCounts = [];
     
     for i = 1:length(yearPeriods)
-        % For normalized dates, April 1 is always in 2025, November 15 is always in 2025
         apr1 = datetime(2025, 4, 1);
         nov15 = datetime(2025, 11, 15);
         
-        % Find data in this period
         inPeriod = yearPeriods(i).normalizedDates >= apr1 & ...
                    yearPeriods(i).normalizedDates <= nov15;
         
@@ -276,9 +345,9 @@ function plotYearOverYearWithEXP(locationData, location, modality, timeperiod, e
     if ~isempty(aprNovCounts)
         aprNovMean = mean(aprNovCounts, 'omitnan');
         plot(xlims, [aprNovMean, aprNovMean], ':', ...
-            'Color', [0.8 0.4 0], 'LineWidth', 2, ...  % Brown/orange color
-            'DisplayName', sprintf('Apr 1 - Nov 15 (%.1f)', aprNovMean));
-        legendEntries{end+1} = sprintf('Apr 1 - Nov 15 (%.1f)', aprNovMean);
+            'Color', [0 0.7 0.7], 'LineWidth', 2, ...  % Cyan color for better contrast
+            'DisplayName', sprintf('Mean Telraam Apr 1 - Nov 15 (%.1f)', aprNovMean));
+        legendEntries{end+1} = sprintf('Mean Telraam Apr 1 - Nov 15 (%.1f)', aprNovMean);
     end
     
     % Format the plot
