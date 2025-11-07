@@ -49,7 +49,7 @@ analysis = struct( ...
     ) ...
 );
 
-dateSpan = 'winter';
+%dateSpan = 'winter';
 %dateSpan = 'DecToFeb';
 %dateSpan = 'springSummer';
 %dateSpan = 'lastWeek';
