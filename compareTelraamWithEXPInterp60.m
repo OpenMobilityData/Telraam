@@ -228,10 +228,13 @@ function plotYearOverYearWithEXP(locationData, location, modality, timeperiod, e
     fig = figure('Position', [100, 100, 1200, 600]);
     hold on;
     
-    % Initialize legend entries array
-    legendEntries = {};
+    % Initialize arrays to store plot handles and labels
+    plotHandles = [];
+    plotLabels = {};
     
-    % 1. First plot Telraam year periods (actual data)
+    % 1. First plot Telraam year periods (store handles)
+    telraamHandles = [];
+    telraamLabels = {};
     for i = 1:length(yearPeriods)
         period = yearPeriods(i);
         color = getYearColor(i);
@@ -239,10 +242,10 @@ function plotYearOverYearWithEXP(locationData, location, modality, timeperiod, e
         % Update label to include "Telraam" prefix
         displayLabel = sprintf('Telraam %s', period.label);
         
-        plot(period.normalizedDates, period.counts, '-', ...
-            'Color', color, 'LineWidth', style.plotLineWidth, ...
-            'DisplayName', displayLabel);
-        legendEntries{end+1} = displayLabel;
+        h = plot(period.normalizedDates, period.counts, '-', ...
+            'Color', color, 'LineWidth', style.plotLineWidth);
+        telraamHandles(end+1) = h;
+        telraamLabels{end+1} = displayLabel;
     end
     
     xlims = xlim;  % Get x-axis limits after plotting data
@@ -264,19 +267,22 @@ function plotYearOverYearWithEXP(locationData, location, modality, timeperiod, e
     % Use consistent color for EXP line across all plots
     expLineColor = [0.2 0.2 0.2];  % Dark gray for all EXP primary lines
     
-    plot(xlims, [expCount, expCount], '--', ...
-        'Color', expLineColor, 'LineWidth', 2, ...
-        'DisplayName', expLabel);
-    legendEntries{end+1} = expLabel;
+    hExp = plot(xlims, [expCount, expCount], '--', ...
+        'Color', expLineColor, 'LineWidth', 2);
     
-    % Add marker for main EXP line
+    % Add marker for main EXP line (no handle needed)
     plot(expStudyNormalized, expCount, 'o', ...
         'MarkerSize', markerSize, ...
         'MarkerEdgeColor', expLineColor, ...
         'MarkerFaceColor', expLineColor, ...
         'HandleVisibility', 'off');
     
-    % 3. Add 2022 benchmark lines for cars only (in correct order)
+    % 3. Add 2022 benchmark lines for cars only
+    hTwoWay = [];
+    hOneWay = [];
+    twoWayLabel = '';
+    oneWayLabel = '';
+    
     if strcmp(modality.displayName, 'Cars')
         % Get the 2022 counts based on time period
         if strcmp(timeperiod, 'AM')
@@ -290,11 +296,10 @@ function plotYearOverYearWithEXP(locationData, location, modality, timeperiod, e
             twoWay2022 = modality.expData.counts2022.(location.shortName).TwoWay_Total;
         end
         
-        % Plot Two-Way 2022 line (first)
-        plot(xlims, [twoWay2022, twoWay2022], '-.', ...
-            'Color', [0.6 0.2 0.6], 'LineWidth', 1.5, ...  % Dark purple
-            'DisplayName', sprintf('EXP Two-Way 2022 (%d)', twoWay2022));
-        legendEntries{end+1} = sprintf('EXP Two-Way 2022 (%d)', twoWay2022);
+        % Plot Two-Way 2022 line
+        hTwoWay = plot(xlims, [twoWay2022, twoWay2022], '-.', ...
+            'Color', [0.6 0.2 0.6], 'LineWidth', 1.5);  % Dark purple
+        twoWayLabel = sprintf('EXP Two-Way 2022 (%d)', twoWay2022);
         
         % Add marker for Two-Way 2022
         plot(expStudyNormalized, twoWay2022, 'o', ...
@@ -303,11 +308,10 @@ function plotYearOverYearWithEXP(locationData, location, modality, timeperiod, e
             'MarkerFaceColor', [0.6 0.2 0.6], ...
             'HandleVisibility', 'off');
         
-        % Plot One-Way 2022 line (second)
-        plot(xlims, [oneWay2022, oneWay2022], '-.', ...
-            'Color', [0.2 0.6 0.2], 'LineWidth', 1.5, ...  % Dark green
-            'DisplayName', sprintf('EXP One-Way 2022 (%d)', oneWay2022));
-        legendEntries{end+1} = sprintf('EXP One-Way 2022 (%d)', oneWay2022);
+        % Plot One-Way 2022 line
+        hOneWay = plot(xlims, [oneWay2022, oneWay2022], '-.', ...
+            'Color', [0.2 0.6 0.2], 'LineWidth', 1.5);  % Dark green
+        oneWayLabel = sprintf('EXP One-Way 2022 (%d)', oneWay2022);
         
         % Add marker for One-Way 2022
         plot(expStudyNormalized, oneWay2022, 'o', ...
@@ -317,13 +321,12 @@ function plotYearOverYearWithEXP(locationData, location, modality, timeperiod, e
             'HandleVisibility', 'off');
     end
     
-    % 4. Calculate and add mean lines (last in order)
+    % 4. Calculate and add mean lines
     % Mean Telraam All
     meanCount = mean(dailyData.counts, 'omitnan');
-    plot(xlims, [meanCount, meanCount], '--', ...
-        'Color', style.meanLineColor, 'LineWidth', 2, ...
-        'DisplayName', sprintf('Mean Telraam All (%.1f)', meanCount));
-    legendEntries{end+1} = sprintf('Mean Telraam All (%.1f)', meanCount);
+    hMeanAll = plot(xlims, [meanCount, meanCount], '--', ...
+        'Color', style.meanLineColor, 'LineWidth', 2);
+    meanAllLabel = sprintf('Mean Telraam All (%.1f)', meanCount);
     
     % Mean Telraam Apr 1 - Nov 15
     aprNovDates = [];
@@ -342,12 +345,60 @@ function plotYearOverYearWithEXP(locationData, location, modality, timeperiod, e
         end
     end
     
+    hMeanAprNov = [];
+    meanAprNovLabel = '';
     if ~isempty(aprNovCounts)
         aprNovMean = mean(aprNovCounts, 'omitnan');
-        plot(xlims, [aprNovMean, aprNovMean], ':', ...
-            'Color', [0 0.7 0.7], 'LineWidth', 2, ...  % Cyan color for better contrast
-            'DisplayName', sprintf('Mean Telraam Apr 1 - Nov 15 (%.1f)', aprNovMean));
-        legendEntries{end+1} = sprintf('Mean Telraam Apr 1 - Nov 15 (%.1f)', aprNovMean);
+        hMeanAprNov = plot(xlims, [aprNovMean, aprNovMean], ':', ...
+            'Color', [0 0.7 0.7], 'LineWidth', 2);  % Cyan color for better contrast
+        meanAprNovLabel = sprintf('Mean Telraam Apr 1 - Nov 15 (%.1f)', aprNovMean);
+    end
+    
+    % 5. Create legend with specific order based on modality
+    if strcmp(modality.displayName, 'Bikes')
+        % Bikes legend order: EXP, then means, then Telraam data
+        plotHandles = [hExp];
+        plotLabels = {expLabel};
+        
+        % Add means
+        if ~isempty(hMeanAprNov)
+            plotHandles = [plotHandles, hMeanAprNov];
+            plotLabels = [plotLabels, {meanAprNovLabel}];
+        end
+        plotHandles = [plotHandles, hMeanAll];
+        plotLabels = [plotLabels, {meanAllLabel}];
+        
+        % Add Telraam data
+        plotHandles = [plotHandles, telraamHandles];
+        plotLabels = [plotLabels, telraamLabels];
+    else
+        % Cars legend order: EXP references, then means, then Telraam data
+        plotHandles = [];
+        plotLabels = {};
+        
+        % EXP lines in order
+        if ~isempty(hTwoWay)
+            plotHandles = [plotHandles, hTwoWay];
+            plotLabels = [plotLabels, {twoWayLabel}];
+        end
+        if ~isempty(hOneWay)
+            plotHandles = [plotHandles, hOneWay];
+            plotLabels = [plotLabels, {oneWayLabel}];
+        end
+        plotHandles = [plotHandles, hExp];
+        plotLabels = [plotLabels, {expLabel}];
+        
+        % Add means
+        if ~isempty(hMeanAprNov)
+            plotHandles = [plotHandles, hMeanAprNov];
+            plotLabels = [plotLabels, {meanAprNovLabel}];
+        end
+        plotHandles = [plotHandles, hMeanAll];
+        plotLabels = [plotLabels, {meanAllLabel}];
+        
+        % Add Telraam data
+        plotHandles = [plotHandles, telraamHandles];
+        plotLabels = [plotLabels, telraamLabels];
     end
     
     % Format the plot
@@ -368,8 +419,8 @@ function plotYearOverYearWithEXP(locationData, location, modality, timeperiod, e
     ax.GridAlpha = 0.3;
     ax.Color = style.axisBackgroundColor;
     
-    % Add legend
-    legend(legendEntries, 'Location', 'best', 'FontSize', style.legendFontSize);
+    % Add legend using handles for correct order
+    legend(plotHandles, plotLabels, 'Location', 'best', 'FontSize', style.legendFontSize);
     
     % Add time window information as text
     if strcmp(timeperiod, 'Combined')
