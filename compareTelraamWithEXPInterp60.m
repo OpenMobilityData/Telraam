@@ -242,10 +242,14 @@ function plotYearOverYearWithEXP(locationData, location, modality, timeperiod, e
         % Update label to include "Telraam" prefix
         displayLabel = sprintf('Telraam %s', period.label);
         
-        h = plot(period.normalizedDates, period.counts, '-', ...
-            'Color', color, 'LineWidth', style.plotLineWidth);
-        telraamHandles(end+1) = h;
-        telraamLabels{end+1} = displayLabel;
+        % Remove NaN values for plotting (MATLAB will break line at NaN)
+        validIdx = ~isnan(period.counts);
+        if any(validIdx)
+            h = plot(period.normalizedDates(validIdx), period.counts(validIdx), '-', ...
+                'Color', color, 'LineWidth', style.plotLineWidth);
+            telraamHandles(end+1) = h;
+            telraamLabels{end+1} = displayLabel;
+        end
     end
     
     xlims = xlim;  % Get x-axis limits after plotting data
@@ -328,6 +332,34 @@ function plotYearOverYearWithEXP(locationData, location, modality, timeperiod, e
         'Color', style.meanLineColor, 'LineWidth', 2);
     meanAllLabel = sprintf('Mean Telraam All (%.1f)', meanCount);
     
+    % Mean Telraam Jun 1 - Oct 31 (for bikes only)
+    hMeanJunOct = [];
+    meanJunOctLabel = '';
+    if strcmp(modality.displayName, 'Bikes')
+        junOctDates = [];
+        junOctCounts = [];
+        
+        for i = 1:length(yearPeriods)
+            jun1 = datetime(2025, 6, 1);
+            oct31 = datetime(2025, 10, 31);
+            
+            inPeriod = yearPeriods(i).normalizedDates >= jun1 & ...
+                       yearPeriods(i).normalizedDates <= oct31;
+            
+            if any(inPeriod)
+                junOctDates = [junOctDates; yearPeriods(i).normalizedDates(inPeriod)];
+                junOctCounts = [junOctCounts; yearPeriods(i).counts(inPeriod)];
+            end
+        end
+        
+        if ~isempty(junOctCounts)
+            junOctMean = mean(junOctCounts, 'omitnan');
+            hMeanJunOct = plot(xlims, [junOctMean, junOctMean], ':', ...
+                'Color', [0.9 0.5 0], 'LineWidth', 2);  % Orange-brown color
+            meanJunOctLabel = sprintf('Mean Telraam Jun 1 - Oct 31 (%.1f)', junOctMean);
+        end
+    end
+    
     % Mean Telraam Apr 1 - Nov 15
     aprNovDates = [];
     aprNovCounts = [];
@@ -360,7 +392,11 @@ function plotYearOverYearWithEXP(locationData, location, modality, timeperiod, e
         plotHandles = [hExp];
         plotLabels = {expLabel};
         
-        % Add means
+        % Add means (Jun-Oct before Apr-Nov)
+        if ~isempty(hMeanJunOct)
+            plotHandles = [plotHandles, hMeanJunOct];
+            plotLabels = [plotLabels, {meanJunOctLabel}];
+        end
         if ~isempty(hMeanAprNov)
             plotHandles = [plotHandles, hMeanAprNov];
             plotLabels = [plotLabels, {meanAprNovLabel}];
@@ -388,7 +424,7 @@ function plotYearOverYearWithEXP(locationData, location, modality, timeperiod, e
         plotHandles = [plotHandles, hExp];
         plotLabels = [plotLabels, {expLabel}];
         
-        % Add means
+        % Add means (no Jun-Oct for cars)
         if ~isempty(hMeanAprNov)
             plotHandles = [plotHandles, hMeanAprNov];
             plotLabels = [plotLabels, {meanAprNovLabel}];
@@ -503,6 +539,14 @@ function dailyData = calculateDailyCountsWithInterpolation(data, modeString, tim
     % Get unique days
     uniqueDays = unique(dateshift(dates, 'start', 'day'));
     
+    % Filter out weekends (Saturday = 7, Sunday = 1)
+    dayOfWeek = weekday(uniqueDays);
+    weekdayMask = dayOfWeek >= 2 & dayOfWeek <= 6;  % Monday to Friday only
+    uniqueDays = uniqueDays(weekdayMask);
+    
+    fprintf('Processing weekdays only: %d weekdays out of %d total days\n', ...
+        length(uniqueDays), length(unique(dateshift(dates, 'start', 'day'))));
+    
     dailyCounts = zeros(length(uniqueDays), 1);
     
     % For each day
@@ -548,11 +592,47 @@ function dailyData = calculateDailyCountsWithInterpolation(data, modeString, tim
         dailyCounts(dayIdx) = round(dayTotal);  % Round to nearest whole count
     end
     
+    % Simple outlier removal using IQR method
+    % This is particularly important for car data which can have data errors
+    Q1 = prctile(dailyCounts, 25);
+    Q3 = prctile(dailyCounts, 75);
+    IQR = Q3 - Q1;
+    
+    % Define outliers as values beyond 3*IQR from quartiles
+    % This is a conservative threshold that will only catch extreme outliers
+    lowerBound = Q1 - 3*IQR;
+    upperBound = Q3 + 3*IQR;
+    
+    % Identify outliers
+    outliers = dailyCounts < lowerBound | dailyCounts > upperBound;
+    
+    if any(outliers)
+        fprintf('Detected %d outliers in daily counts (values > %.0f or < %.0f)\n', ...
+            sum(outliers), upperBound, lowerBound);
+        
+        % Replace outliers with NaN
+        dailyCounts(outliers) = NaN;
+        
+        % Report which dates had outliers
+        outlierDates = uniqueDays(outliers);
+        for i = 1:min(5, length(outlierDates))  % Show first 5 outliers
+            outlierIdx = find(outliers);
+            fprintf('  %s: count = %.0f (replaced with NaN)\n', ...
+                datestr(outlierDates(i), 'yyyy-mm-dd'), ...
+                dailyCounts(outlierIdx(i)));
+        end
+    end
+    
     dailyData.dates = uniqueDays;
     dailyData.counts = dailyCounts;
     
+    % Report statistics (excluding NaN values)
+    validCounts = dailyCounts(~isnan(dailyCounts));
     fprintf('Calculated daily counts (with interpolation): %d days, mean=%.1f, max=%d\n', ...
-        length(uniqueDays), mean(dailyCounts), max(dailyCounts));
+        length(uniqueDays), mean(validCounts), max(validCounts));
+    if sum(isnan(dailyCounts)) > 0
+        fprintf('  Note: %d outlier days excluded from statistics\n', sum(isnan(dailyCounts)));
+    end
 end
 
 function yearPeriods = createYearPeriods(dailyData)
