@@ -31,7 +31,7 @@ modeString = 'Bike Total'; modeDisplayString = 'Bike Counts';
 
 analysis = struct( ...
     'startTime', datetime(2024,08,15,00,00,01), ...
-    'endTime', datetime(2025,10,31,23,59,59), ...
+    'endTime', datetime(2025,11,23,23,59,59), ...
     'modeString', modeString, ...
     'modeDisplayString', modeDisplayString, ...
     'uptimeThreshold', 0.0, ...
@@ -40,6 +40,7 @@ analysis = struct( ...
     'daylightCorrectionRatioWD', 1.65, ...
     'daylightCorrectionRatioWE', 1.37, ...
     'includePartialMonths', false, ...
+    'weekdaysOnly', false, ... % If 'true' may cause issues with weather API
     'outlierDetection', struct( ...
         'enabled', true, ...
         'method', 'iqr', ...  % 'iqr', 'zscore', or 'manual'
@@ -49,8 +50,9 @@ analysis = struct( ...
     ) ...
 );
 
-%dateSpan = 'winter';
+%dateSpan = 'winter';  % Official bike path closure season
 %dateSpan = 'DecToFeb';
+%dateSpan = 'NovToFeb';
 %dateSpan = 'springSummer';
 %dateSpan = 'lastWeek';
 %dateSpan = 'lastMonth';
@@ -64,6 +66,9 @@ if exist('dateSpan', 'var')
         analysis.endTime = datetime(2025,03,31,23,59,59);
     elseif strcmp(dateSpan,'DecToFeb')
         analysis.startTime = datetime(2024,12,01,00,00,01);
+        analysis.endTime = datetime(2025,02,28,23,59,59);
+    elseif strcmp(dateSpan,'NovToFeb')
+        analysis.startTime = datetime(2024,11,01,00,00,01);
         analysis.endTime = datetime(2025,02,28,23,59,59);
     elseif strcmp(dateSpan,'springSummer')
         analysis.startTime = datetime(2025,04,01,23,59,59);
@@ -125,6 +130,11 @@ for i = 1:length(locations)
     
     % Process data
     processedData = processTelraamData(rawData, analysis);
+
+    % Filter to weekdays if rquested
+    if analysis.weekdaysOnly
+        processedData = processedData(processedData.isWeekday==1,:);
+    end
     
     % Store in structure
     fieldName = matlab.lang.makeValidName(location.name);
