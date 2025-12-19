@@ -1,5 +1,13 @@
 %% Modular Telraam Analysis - Single Script Version
 % This version can be run as a single script while maintaining modularity
+%
+% Supports two types of bike counting sources:
+%   - Telraam: Machine vision counters (daylight-only, operated by residents)
+%   - EVO: Inductive loop counters (24/7, operated by the city)
+%
+% The script processes Telraam data with daylight corrections first,
+% then injects EVO data (no daylight processing needed) for multi-location
+% comparison charts.
 
 clear all; close all; clc;
 
@@ -7,18 +15,27 @@ clear all; close all; clc;
 
 westernSegmentName = 'rue de Terrebonne @ King Edward';
 easternSegmentName = 'rue de Terrebonne @ Draper';
+evoSegmentName = 'rue de Terrebonne @ Kensington';
 
-% Locations to analyze
+% Locations to analyze (Telraam sources only - EVO added after daylight processing)
 locations = {
     struct('name', easternSegmentName, ...
            'fileStem2024', 'raw-data-2024East60', ...
            'fileStem2025', 'raw-data-2025East60', ...
-           'plotColor', [0 0 1]);  % Blue
+           'plotColor', [0 0 1], ...  % Blue
+           'source', 'Telraam');
     struct('name', westernSegmentName, ...
            'fileStem2024', 'raw-data-2024West60', ...
            'fileStem2025', 'raw-data-2025West60', ...
-           'plotColor', [0 0 0]);  % Black
+           'plotColor', [0 0 0], ...  % Black
+           'source', 'Telraam');
 };
+
+% EVO counter location (added separately after Telraam daylight processing)
+evoLocation = struct('name', evoSegmentName, ...
+                     'evoFile', 'Comptage_permanent_Terrebonne_26072025_15112025.xlsx', ...
+                     'plotColor', [0.8 0 0.8], ...  % Magenta
+                     'source', 'EVO');
 
 %locations = {locations{2}}; % Use to select a single location
 
@@ -103,7 +120,7 @@ style = struct( ...
     'axisFontSize', 16.0, ...
     'labelFontSize', 20.0, ...
     'titleFontSize', 24.0, ...
-    'legendFontSize', 16.0, ...
+    'legendFontSize', 14.0, ...
     'axisBackgroundColor', 0.8.*[1 1 1], ...
     'legendBackgroundAlpha', 0.2 ...
 );
@@ -118,17 +135,17 @@ multiModal = struct( ...
 );
 
 
-%% Load and Process Data for All Locations
+%% Load and Process Data for All Telraam Locations
 locationData = struct();
 
 for i = 1:length(locations)
     location = locations{i};
-    fprintf('Loading data for %s...\n', location.name);
+    fprintf('Loading Telraam data for %s...\n', location.name);
     
     % Load raw data
     rawData = loadSingleLocationData(location, analysis);
     
-    % Process data
+    % Process data (includes daylight corrections for Telraam)
     processedData = processTelraamData(rawData, analysis);
 
     % Filter to weekdays if rquested
@@ -140,6 +157,30 @@ for i = 1:length(locations)
     fieldName = matlab.lang.makeValidName(location.name);
     locationData.(fieldName).data = processedData;
     locationData.(fieldName).locationInfo = location;
+end
+
+%% Load and Add EVO Counter Data (no daylight processing needed)
+fprintf('Loading EVO counter data for %s...\n', evoLocation.name);
+try
+    evoData = loadEvoCounterData(evoLocation, analysis);
+    
+    if ~isempty(evoData) && height(evoData) > 0
+        % Filter to weekdays if requested
+        if analysis.weekdaysOnly
+            evoData = evoData(evoData.isWeekday==1,:);
+        end
+        
+        % Store in locationData structure
+        fieldName = matlab.lang.makeValidName(evoLocation.name);
+        locationData.(fieldName).data = evoData;
+        locationData.(fieldName).locationInfo = evoLocation;
+        fprintf('Successfully loaded %s EVO observations.\n', num2sepstr(height(evoData), '%.0f'));
+    else
+        warning('No valid EVO data loaded for %s', evoLocation.name);
+    end
+catch ME
+    warning('Failed to load EVO data: %s', ME.message);
+    fprintf('EVO file may not exist: %s\n', evoLocation.evoFile);
 end
 
 %% Get Weather Data (once for all locations) - with caching
@@ -230,30 +271,35 @@ plotTemperatureScatterWeekly(locationData, weatherData, analysis, plots, style);
 %% Multivariate Weather Analysis (MOVED TO SEPARATE SCRIPT)
 % performMultivariateWeatherAnalysis(locationData, weatherData, analysis, style);
 
-%% Generate Scatter Plot comparing counts at the two locations
-if length(locations) > 1
-    plotLocationCorrelation(locationData, analysis, plots, style, 'daily');
+%% Generate Scatter Plot comparing counts at the two Telraam locations
+% Filter to only Telraam sources for this comparison
+telraamLocationData = filterLocationDataBySource(locationData, 'Telraam');
+if length(fieldnames(telraamLocationData)) > 1
+    plotLocationCorrelation(telraamLocationData, analysis, plots, style, 'daily');
 end
 
-% Generate Bike vs Other Modalities Correlation Plots
-plotBikeModalityCorrelation(locationData, analysis, plots, style);
+% Generate Bike vs Other Modalities Correlation Plots (Telraam only - EVO doesn't have pedestrian data)
+telraamLocationData = filterLocationDataBySource(locationData, 'Telraam');
+plotBikeModalityCorrelation(telraamLocationData, analysis, plots, style);
 
-%% Generate Modality Pie and Bar Charts
-plotModalityPieCharts(locationData, analysis, style);
-plotModalityBarChart(locationData, analysis, style);
+%% Generate Modality Pie and Bar Charts (Telraam only)
+plotModalityPieCharts(telraamLocationData, analysis, style);
+plotModalityBarChart(telraamLocationData, analysis, style);
 
-%% Generate Multi-Modal Plots for ALL Locations
+%% Generate Multi-Modal Plots for Telraam Locations Only
+% (EVO doesn't have pedestrian data)
 if multiModal.enabled
-    % Get all location names
-    locationNames = fieldnames(locationData);
+    % Get Telraam location names only
+    telraamLocationData = filterLocationDataBySource(locationData, 'Telraam');
+    telraamLocationNames = fieldnames(telraamLocationData);
     
-    % Loop through each location
-    for locIdx = 1:length(locationNames)
-        currentLocationName = locationNames{locIdx};
+    % Loop through each Telraam location
+    for locIdx = 1:length(telraamLocationNames)
+        currentLocationName = telraamLocationNames{locIdx};
         
         % Extract the actual location name from the field name
         % (field names are MATLAB-valid versions of the location names)
-        actualLocationName = locationData.(currentLocationName).locationInfo.name;
+        actualLocationName = telraamLocationData.(currentLocationName).locationInfo.name;
         
         % Create a copy of multiModal config for this location
         multiModalCurrent = multiModal;
@@ -263,16 +309,16 @@ if multiModal.enabled
         
         % Generate plots for this location
         try
-            plotMultiModalDaily(locationData, weatherData, analysis, plots, style, multiModalCurrent);
-            plotMultiModalWeekly(locationData, weatherData, analysis, plots, style, multiModalCurrent);
-            plotMultiModalMonthly(locationData, weatherData, analysis, plots, style, multiModalCurrent);
-            %plotMultiModalHourlyPatterns(locationData, analysis, plots, style, multiModalCurrent);
+            plotMultiModalDaily(telraamLocationData, weatherData, analysis, plots, style, multiModalCurrent);
+            plotMultiModalWeekly(telraamLocationData, weatherData, analysis, plots, style, multiModalCurrent);
+            plotMultiModalMonthly(telraamLocationData, weatherData, analysis, plots, style, multiModalCurrent);
+            %plotMultiModalHourlyPatterns(telraamLocationData, analysis, plots, style, multiModalCurrent);
         catch ME
             warning('Failed to generate multi-modal plots for %s: %s', actualLocationName, ME.message);
         end
     end
     
-    fprintf('Completed multi-modal plots for all %d locations.\n', length(locationNames));
+    fprintf('Completed multi-modal plots for all %d Telraam locations.\n', length(telraamLocationNames));
 end
 
 %% Generate Year-over-Year Comparison Plots
@@ -413,6 +459,9 @@ function plotCombinedDaily(locationData, weatherData, analysis, plots, style)
         data = locationData.(locationName);
         locationInfo = data.locationInfo;
         
+        % Generate source label for legend
+        sourceLabel = getSourceLabel(locationInfo);
+        
         % Calculate daily totals
         dailyData = calculateDailyTotals(data, analysis);
         
@@ -421,8 +470,8 @@ function plotCombinedDaily(locationData, weatherData, analysis, plots, style)
             h1 = plot(dailyData.dates, dailyData.rawCounts, '-', ...
                 'LineWidth', style.plotLineWidth * 0.5, ...
                 'Color', locationInfo.plotColor, ...
-                'DisplayName', sprintf('%s Raw ( Min = %s ; Max = %s ; Total = %s )', ...
-                    locationInfo.name, ...
+                'DisplayName', sprintf('%s %s ( Min = %s ; Max = %s ; Total = %s )', ...
+                    locationInfo.name, sourceLabel, ...
                     num2sepstr(min(dailyData.rawCounts), '%.0f'), ...
                     num2sepstr(max(dailyData.rawCounts), '%.0f'), ...
                     num2sepstr(sum(dailyData.rawCounts), '%.0f')));
@@ -434,7 +483,7 @@ function plotCombinedDaily(locationData, weatherData, analysis, plots, style)
             h2 = plot(dailyData.dates, dailyData.adjustedCounts, '--', ...
                 'LineWidth', style.plotLineWidth * 0.3, ...
                 'Color', locationInfo.plotColor * 0.7, ...
-                'DisplayName', sprintf('%s Adjusted ( Min = %s ; Max = %s ; Total = %s )', ...
+                'DisplayName', sprintf('%s Telraam Corrected ( Min = %s ; Max = %s ; Total = %s )', ...
                     locationInfo.name, ...
                     num2sepstr(min(dailyData.adjustedCounts), '%.0f'), ...
                     num2sepstr(max(dailyData.adjustedCounts), '%.0f'), ...
@@ -707,6 +756,9 @@ function plotCombinedWeekly(locationData, weatherData, analysis, plots, style)
         data = locationData.(locationName);
         locationInfo = data.locationInfo;
         
+        % Generate source label for legend
+        sourceLabel = getSourceLabel(locationInfo);
+        
         % Calculate weekly totals
         weeklyData = calculateWeeklyTotals(data, analysis);
         
@@ -715,8 +767,8 @@ function plotCombinedWeekly(locationData, weatherData, analysis, plots, style)
             h1 = plot(weeklyData.weekStarts, weeklyData.rawCounts, '-', ...
                 'LineWidth', style.plotLineWidth * 0.5, ...
                 'Color', locationInfo.plotColor, ...
-                'DisplayName', sprintf('%s Raw ( Min = %s ; Max = %s ; Total = %s )', ...
-                    locationInfo.name, ...
+                'DisplayName', sprintf('%s %s ( Min = %s ; Max = %s ; Total = %s )', ...
+                    locationInfo.name, sourceLabel, ...
                     num2sepstr(min(weeklyData.rawCounts), '%.0f'), ...
                     num2sepstr(max(weeklyData.rawCounts), '%.0f'), ...
                     num2sepstr(sum(weeklyData.rawCounts), '%.0f')));
@@ -728,7 +780,7 @@ function plotCombinedWeekly(locationData, weatherData, analysis, plots, style)
             h2 = plot(weeklyData.weekStarts, weeklyData.adjustedCounts, '--', ...
                 'LineWidth', style.plotLineWidth * 0.3, ...
                 'Color', locationInfo.plotColor * 0.7, ...
-                'DisplayName', sprintf('%s Adjusted ( Min = %s ; Max = %s ; Total = %s )', ...
+                'DisplayName', sprintf('%s Telraam Corrected ( Min = %s ; Max = %s ; Total = %s )', ...
                     locationInfo.name, ...
                     num2sepstr(min(weeklyData.adjustedCounts), '%.0f'), ...
                     num2sepstr(max(weeklyData.adjustedCounts), '%.0f'), ...
@@ -770,6 +822,10 @@ function weeklyData = calculateWeeklyTotals(locationDataStruct, analysis)
     % Get week start dates for each yearWeekKey
     weekStartGrouped = groupsummary(data, 'yearWeekKey', 'min', 'weekStartDateTimes');
     
+    % Count unique days per week to identify incomplete weeks
+    data.DayOnly = dateshift(data.('Date and Time (Local)'), 'start', 'day');
+    daysPerWeek = groupsummary(data, 'yearWeekKey', @(x) length(unique(x)), 'DayOnly');
+    
     % Combine results
     weeklyData = struct();
     weeklyData.yearWeekKeys = groupedData.yearWeekKey;
@@ -797,8 +853,17 @@ function weeklyData = calculateWeeklyTotals(locationDataStruct, analysis)
     daylightCounts = zeros(size(weeklyData.rawCounts));
     daylightCounts(ie) = daylightGrouped.sum_Daylight(if_);
     
-    % Keep only weeks that have some daylight data
-    validWeeks = daylightCounts > 0;
+    % Get days count per week
+    [~, ig, ih] = intersect(groupedData.yearWeekKey, daysPerWeek.yearWeekKey);
+    daysCount = zeros(size(weeklyData.rawCounts));
+    daysCount(ig) = daysPerWeek.fun1_DayOnly(ih);
+    
+    % Keep only weeks that have some daylight data AND are reasonably complete
+    % Require at least 5 days of data for a week to be considered valid
+    % (allows for minor gaps but filters out partial first/last weeks)
+    minDaysForCompleteWeek = 5;
+    validWeeks = (daylightCounts > 0) & (daysCount >= minDaysForCompleteWeek);
+    
     weeklyData.yearWeekKeys = weeklyData.yearWeekKeys(validWeeks);
     weeklyData.weekStarts = weeklyData.weekStarts(validWeeks);
     weeklyData.rawCounts = weeklyData.rawCounts(validWeeks);
@@ -924,6 +989,9 @@ function plotCombinedMonthly(locationData, weatherData, analysis, plots, style)
         data = locationData.(locationName);
         locationInfo = data.locationInfo;
 
+        % Generate source label for legend
+        sourceLabel = getSourceLabel(locationInfo);
+
         % Calculate monthly totals
         monthlyData = calculateMonthlyTotals(data, analysis);
 
@@ -934,8 +1002,8 @@ function plotCombinedMonthly(locationData, weatherData, analysis, plots, style)
                 'MarkerSize', style.plotLineWidth * 2, ...
                 'Color', locationInfo.plotColor, ...
                 'MarkerFaceColor', locationInfo.plotColor, ...
-                'DisplayName', sprintf('%s Raw ( Min = %s ; Max = %s ; Total = %s )', ...
-                locationInfo.name, ...
+                'DisplayName', sprintf('%s %s ( Min = %s ; Max = %s ; Total = %s )', ...
+                locationInfo.name, sourceLabel, ...
                 num2sepstr(min(monthlyData.rawCounts), '%.0f'), ...
                 num2sepstr(max(monthlyData.rawCounts), '%.0f'), ...
                 num2sepstr(sum(monthlyData.rawCounts), '%.0f')));
@@ -949,7 +1017,7 @@ function plotCombinedMonthly(locationData, weatherData, analysis, plots, style)
                 'MarkerSize', style.plotLineWidth * 1.5, ...
                 'Color', locationInfo.plotColor * 0.7, ...
                 'MarkerFaceColor', locationInfo.plotColor * 0.7, ...
-                'DisplayName', sprintf('%s Adjusted ( Min = %s ; Max = %s ; Total = %s )', ...
+                'DisplayName', sprintf('%s Telraam Corrected ( Min = %s ; Max = %s ; Total = %s )', ...
                 locationInfo.name, ...
                 num2sepstr(min(monthlyData.adjustedCounts), '%.0f'), ...
                 num2sepstr(max(monthlyData.adjustedCounts), '%.0f'), ...
@@ -3185,7 +3253,7 @@ function plotCombinedHourlyRaw(locationData, weatherData, analysis, plots, style
                 h2 = plot(offsetTimes, hourlyData.adjustedCounts, '.', ...
                     'MarkerSize', 2, ...
                     'Color', locationInfo.plotColor * 0.7, ...
-                    'DisplayName', sprintf('%s Adjusted (n=%d, range: %s-%s)', ...
+                    'DisplayName', sprintf('%s Telraam Corrected (n=%d, range: %s-%s)', ...
                         locationInfo.name, ...
                         length(hourlyData.adjustedCounts), ...
                         num2sepstr(min(hourlyData.adjustedCounts), '%.0f'), ...
@@ -3433,6 +3501,8 @@ function filteredLocationData = filterNightData(locationData, weatherData)
     %
     % This provides a more accurate representation of detection capabilities
     % during periods when the computer vision system can actually detect bikes/pedestrians
+    %
+    % NOTE: EVO counter data is NOT filtered as it counts 24/7 via inductive loops
     
     fprintf('Filtering nighttime data where bike/pedestrian detection is not possible...\n');
     
@@ -3447,7 +3517,17 @@ function filteredLocationData = filterNightData(locationData, weatherData)
         
         fprintf('Processing location: %s\n', locationInfo.name);
         
-        % Apply night filtering to this location's data
+        % Skip night filtering for EVO sources (they count 24/7)
+        if isfield(locationInfo, 'source') && strcmp(locationInfo.source, 'EVO')
+            fprintf('  Skipping night filter for EVO source (counts 24/7)\n');
+            filteredLocationData.(locationName) = struct();
+            filteredLocationData.(locationName).data = data.data;
+            filteredLocationData.(locationName).locationInfo = locationInfo;
+            fprintf('  Observations: %s (no filtering applied)\n', num2sepstr(height(data.data), '%.0f'));
+            continue;
+        end
+        
+        % Apply night filtering to Telraam location's data
         filteredData = applyNightFilter(data.data, weatherData);
         
         % Store filtered data back in the structure
@@ -6355,4 +6435,189 @@ function monthlyData = calculateCorridorMonthlyData(locationData, analysis)
     monthlyData = struct();
     monthlyData.monthStarts = corridorMonthly.MonthStart;
     monthlyData.counts = corridorMonthly.mean_Count;
+end
+
+%% ======================== EVO COUNTER FUNCTIONS ========================
+
+function evoTable = loadEvoCounterData(evoLocation, analysis)
+    % Load EVO counter data from Excel file with specific format
+    % The EVO file has:
+    %   - Row 1: Period description
+    %   - Row 2: Empty
+    %   - Row 3: Headers (Time, Rue Terrebonne Cyclist, IN_est, OUT_ouest, Vehicles, Total)
+    %   - Row 4+: Data
+    
+    fprintf('Reading EVO Excel file: %s\n', evoLocation.evoFile);
+    
+    if ~exist(evoLocation.evoFile, 'file')
+        warning('EVO file not found: %s', evoLocation.evoFile);
+        evoTable = table();
+        return;
+    end
+    
+    % Read the data starting from row 4 (data rows)
+    opts = detectImportOptions(evoLocation.evoFile);
+    opts.DataRange = 'A4';  % Start from row 4
+    opts.VariableNamingRule = 'preserve';
+    
+    % Set expected variable names based on the known format
+    opts.VariableNames = {'Time', 'Cyclist_Total', 'Cyclist_IN', 'Cyclist_OUT', 'Vehicles', 'Total'};
+    opts.VariableTypes = {'datetime', 'double', 'double', 'double', 'double', 'double'};
+    
+    try
+        rawTable = readtable(evoLocation.evoFile, opts);
+    catch ME
+        warning('Error reading EVO file with predefined options: %s. Trying alternate method.', ME.message);
+        
+        % Alternate method: read as raw data
+        rawTable = readtable(evoLocation.evoFile, 'Range', 'A4', 'ReadVariableNames', false);
+        
+        if width(rawTable) >= 2
+            % Parse datetime from first column
+            if iscell(rawTable{:,1})
+                timeStrings = rawTable{:,1};
+            else
+                timeStrings = string(rawTable{:,1});
+            end
+            
+            % Try to parse datetime
+            try
+                parsedTimes = datetime(timeStrings, 'InputFormat', 'dd-MM-yyyy HH:mm:ss');
+            catch
+                try
+                    parsedTimes = datetime(timeStrings, 'InputFormat', 'dd-MM-uuuu HH:mm:ss');
+                catch
+                    parsedTimes = datetime(timeStrings);
+                end
+            end
+            
+            rawTable.Time = parsedTimes;
+            rawTable.Cyclist_Total = rawTable{:,2};
+        end
+    end
+    
+    % Remove rows with missing time or count data
+    validRows = ~isnat(rawTable.Time) & ~isnan(rawTable.Cyclist_Total);
+    rawTable = rawTable(validRows, :);
+    
+    if isempty(rawTable) || height(rawTable) == 0
+        warning('No valid data found in EVO file');
+        evoTable = table();
+        return;
+    end
+    
+    fprintf('Loaded %d raw EVO observations\n', height(rawTable));
+    
+    % Convert to format compatible with existing locationData structure
+    evoTable = convertEvoToTelraamFormat(rawTable, analysis);
+    
+    % Apply date range filter
+    evoTable = evoTable(evoTable.('Date and Time (Local)') >= analysis.startTime & ...
+                        evoTable.('Date and Time (Local)') <= analysis.endTime, :);
+    
+    fprintf('After date filtering: %d EVO observations\n', height(evoTable));
+end
+
+function evoTable = convertEvoToTelraamFormat(rawEvoTable, analysis)
+    % Convert EVO data format to match Telraam format for compatibility
+    % with existing analysis functions
+    
+    n = height(rawEvoTable);
+    
+    % Create table with same columns as Telraam data
+    evoTable = table();
+    
+    % Core data columns
+    evoTable.('Date and Time (Local)') = rawEvoTable.Time;
+    evoTable.('Bike Total') = rawEvoTable.Cyclist_Total;
+    
+    % Uptime always 1 for EVO (continuous counting)
+    evoTable.Uptime = ones(n, 1);
+    
+    % EVO doesn't have pedestrian/vehicle/night data in the same format
+    % Set placeholders that won't break downstream functions
+    evoTable.('Pedestrian Total') = zeros(n, 1);
+    evoTable.('Car Total') = zeros(n, 1);
+    if ismember('Vehicles', rawEvoTable.Properties.VariableNames)
+        evoTable.('Car Total') = rawEvoTable.Vehicles;
+    end
+    evoTable.('Large vehicle Total') = zeros(n, 1);
+    evoTable.('Night Total') = zeros(n, 1);  % EVO counts 24/7
+    evoTable.('Speed V85 km/h') = nan(n, 1);  % Not available
+    
+    % Add temporal columns (matching addTemporalColumns)
+    weekdays = {'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'};
+    
+    evoTable.dayOfWeek = string(day(evoTable.('Date and Time (Local)'),'name'));
+    evoTable.dayOfWeekCat = categorical(evoTable.dayOfWeek);
+    evoTable.weekOfYear = week(evoTable.('Date and Time (Local)'),'iso-weekofyear');
+    evoTable.isWeekday = ismember(evoTable.dayOfWeekCat, weekdays);
+    evoTable.weekStartDateTimes = dateshift(dateshift(evoTable.('Date and Time (Local)'),'dayofweek','Monday','previous'),'start','day');
+    
+    % Daylight handling: EVO counts 24/7, so set all to daylight=true
+    % This ensures no daylight filtering is applied
+    evoTable.Daylight = true(n, 1);
+    evoTable.DaylightUptime = ones(n, 1);
+    
+    % Fix week numbering (matching fixWeekNumbering)
+    evoTable.weekOfYear((month(evoTable.('Date and Time (Local)'))==12) & (evoTable.weekOfYear==1)) = 53;
+    evoTable.weekOfYear((month(evoTable.('Date and Time (Local)'))==1) & (evoTable.weekOfYear==1)) = 53;
+    evoTable.yearOfMondayInWeek = year(evoTable.weekStartDateTimes);
+    januaryIndicesToChange = (month(evoTable.weekStartDateTimes)==1) & (evoTable.weekOfYear==53);
+    evoTable.yearOfMondayInWeek(januaryIndicesToChange) = evoTable.yearOfMondayInWeek(januaryIndicesToChange) - 1;
+    evoTable.yearWeekKey = evoTable.yearOfMondayInWeek + evoTable.weekOfYear./100;
+    
+    % EVO doesn't need uptime or daylight corrections
+    % Set adjusted counts equal to raw counts
+    evoTable.AdjustedCountsUptime = evoTable.('Bike Total');
+    evoTable.AdjustedCountsUptimeDaylight = evoTable.('Bike Total');
+    
+    % Convert to timetable for compatibility
+    evoTable = table2timetable(evoTable);
+end
+
+function sourceLabel = getSourceLabel(locationInfo)
+    % Generate a concise source label for plot legends
+    % Returns 'Telraam Raw' for Telraam sources, or source type indicator for others
+    
+    if isfield(locationInfo, 'source')
+        source = locationInfo.source;
+        if strcmp(source, 'Telraam')
+            sourceLabel = 'Telraam Raw';  % Distinguish from EVO and potential Telraam Corrected
+        elseif strcmp(source, 'EVO')
+            sourceLabel = 'EVO';  % Indicate EVO inductive counter
+        else
+            sourceLabel = source;
+        end
+    else
+        sourceLabel = 'Telraam Raw';  % Default to Telraam Raw if no source specified
+    end
+end
+
+function filteredData = filterLocationDataBySource(locationData, sourceType)
+    % Filter locationData structure to include only locations with specified source type
+    %
+    % Parameters:
+    %   locationData - struct with location data
+    %   sourceType - string: 'Telraam', 'EVO', or 'all'
+    %
+    % Returns:
+    %   filteredData - struct with only matching locations
+    
+    if strcmp(sourceType, 'all')
+        filteredData = locationData;
+        return;
+    end
+    
+    filteredData = struct();
+    locationNames = fieldnames(locationData);
+    
+    for i = 1:length(locationNames)
+        locationName = locationNames{i};
+        locationInfo = locationData.(locationName).locationInfo;
+        
+        if isfield(locationInfo, 'source') && strcmp(locationInfo.source, sourceType)
+            filteredData.(locationName) = locationData.(locationName);
+        end
+    end
 end
