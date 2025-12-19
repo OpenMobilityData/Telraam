@@ -31,7 +31,7 @@ modeString = 'Bike Total'; modeDisplayString = 'Bike Counts';
 
 analysis = struct( ...
     'startTime', datetime(2024,08,15,00,00,01), ...
-    'endTime', datetime(2025,11,23,23,59,59), ...
+    'endTime', datetime(2025,12,14,23,59,59), ...
     'modeString', modeString, ...
     'modeDisplayString', modeDisplayString, ...
     'uptimeThreshold', 0.0, ...
@@ -4837,10 +4837,10 @@ end
 %% Bike vs other modalities
 
 function plotBikeModalityCorrelation(locationData, analysis, plots, style)
-    % Plot correlation scatter plots between weekly bike counts and other modalities
+    % Plot correlation scatter plots between weekly/monthly bike counts and other modalities
     %
     % This function creates scatter plots showing the correlation between
-    % weekly bike counts and weekly counts for other transportation modes
+    % weekly and monthly bike counts and counts for other transportation modes
     % (cars and pedestrians) at both monitoring locations.
     %
     % Inputs:
@@ -4857,7 +4857,11 @@ function plotBikeModalityCorrelation(locationData, analysis, plots, style)
     
     locationNames = fieldnames(locationData);
     
-    % Create a separate plot for each comparison mode
+    % =====================================================================
+    % WEEKLY PLOTS
+    % =====================================================================
+    
+    % Create a separate plot for each comparison mode (Weekly)
     for modeIdx = 1:length(comparisonModes)
         currentMode = comparisonModes{modeIdx};
         
@@ -4939,7 +4943,7 @@ function plotBikeModalityCorrelation(locationData, analysis, plots, style)
         % No overall trend line needed since locations have different patterns
         
         % Format the plot
-        formatModalityCorrelationPlot(currentMode, analysis, style, allModeCounts, allBikeCounts);
+        formatModalityCorrelationPlot(currentMode, analysis, style, allModeCounts, allBikeCounts, 'weekly');
         
         % Remove correlation statistics box - slopes are now in legend
         % addModalityCorrelationStatsBox(corrStats, [], style, length(allBikeCounts), currentMode.shortName);
@@ -4955,7 +4959,107 @@ function plotBikeModalityCorrelation(locationData, analysis, plots, style)
         % Print summary to console (optional - can be removed if not needed)
         if ~isempty(allBikeCounts) && length(allBikeCounts) >= 3
             [corrStats, ~] = calculateCorrelationStats(allModeCounts, allBikeCounts);
-            printModalityCorrelationSummary(currentMode, corrStats, [], length(allBikeCounts));
+            printModalityCorrelationSummary(currentMode, corrStats, [], length(allBikeCounts), 'weekly');
+        end
+    end
+    
+    % =====================================================================
+    % MONTHLY PLOTS
+    % =====================================================================
+    
+    % Create a separate plot for each comparison mode (Monthly)
+    for modeIdx = 1:length(comparisonModes)
+        currentMode = comparisonModes{modeIdx};
+        
+        % Create figure for this mode comparison
+        figure('Name', ['Bikes vs ' currentMode.shortName ' - Monthly Correlation'], 'NumberTitle', 'off', 'Position', [458 126 1132 921]);
+        hold on;
+        
+        plotHandles = [];
+        allBikeCounts = [];
+        allModeCounts = [];
+        
+        % Process each location
+        for i = 1:length(locationNames)
+            locationName = locationNames{i};
+            data = locationData.(locationName);
+            locationInfo = data.locationInfo;
+            
+            % Get monthly bike counts and monthly counts for the comparison mode
+            [bikeCounts, modeCounts, monthStarts, validIdx] = prepareMonthlyModalityData(data, analysis, currentMode.columnName);
+
+            if ~isempty(bikeCounts) && length(bikeCounts) >= 3
+                % Calculate trend line first to get slope for legend
+                locationSlope = NaN; % Default if trend calculation fails
+                locationHorizontalIntercept = NaN; % Default if trend calculation fails
+                if length(bikeCounts) > 3
+                    [trendParams, trendStats] = calculateLocationTrend(modeCounts, bikeCounts);
+
+                    if ~isempty(trendParams)
+                        locationSlope = trendParams.slope;
+                        locationHorizontalIntercept = trendParams.horizontalIntercept;
+
+                        % Plot trend line
+                        xRange = linspace(min(modeCounts), max(modeCounts), 100);
+                        trendLine = trendParams.slope * xRange + trendParams.intercept;
+
+                        plot(xRange, trendLine, '--', ...
+                            'Color', locationInfo.plotColor, ...
+                            'LineWidth', 1.5, ...
+                            'HandleVisibility', 'off');  % Don't show in legend
+                    end
+                end
+
+                % Create display name with slope and horizontal intercept if available
+                if ~isnan(locationSlope) && ~isnan(locationHorizontalIntercept)
+                    if locationHorizontalIntercept >= 0
+                        displayName = sprintf('%s (%d months, slope = %.3f, x-intercept = %s)', ...
+                            extractLocationShortName(locationInfo.name), length(bikeCounts), ...
+                            locationSlope, num2sepstr(locationHorizontalIntercept,'%.0f'));
+                    else
+                        % Handle negative intercepts (which don't make physical sense for counts)
+                        displayName = sprintf('%s (%d months, slope = %.3f, x-intercept < 0)', ...
+                            extractLocationShortName(locationInfo.name), length(bikeCounts), ...
+                            locationSlope);
+                    end
+                elseif ~isnan(locationSlope)
+                    displayName = sprintf('%s (%d months, slope = %.3f)', ...
+                        extractLocationShortName(locationInfo.name), length(bikeCounts), locationSlope);
+                else
+                    displayName = sprintf('%s (%d months)', ...
+                        extractLocationShortName(locationInfo.name), length(bikeCounts));
+                end
+                % Create scatter plot for this location
+                h = scatter(modeCounts, bikeCounts, 120, ...  % Slightly larger markers for monthly
+                    'MarkerFaceColor', locationInfo.plotColor, ...
+                    'MarkerEdgeColor', locationInfo.plotColor * 0.7, ...
+                    'MarkerFaceAlpha', 0.6, ...
+                    'MarkerEdgeAlpha', 0.8, ...
+                    'DisplayName', displayName);
+                
+                plotHandles = [plotHandles, h];
+                
+                % Collect data for overall trend analysis
+                allBikeCounts = [allBikeCounts; bikeCounts];
+                allModeCounts = [allModeCounts; modeCounts];
+            end
+        end
+        
+        % Format the plot
+        formatModalityCorrelationPlot(currentMode, analysis, style, allModeCounts, allBikeCounts, 'monthly');
+        
+        % Add legend
+        if ~isempty(plotHandles)
+            legend(plotHandles, 'Location', 'northwest', 'Color', style.axisBackgroundColor, ...
+                'FontSize', style.legendFontSize);
+        end
+        
+        hold off;
+        
+        % Print summary to console (optional - can be removed if not needed)
+        if ~isempty(allBikeCounts) && length(allBikeCounts) >= 3
+            [corrStats, ~] = calculateCorrelationStats(allModeCounts, allBikeCounts);
+            printModalityCorrelationSummary(currentMode, corrStats, [], length(allBikeCounts), 'monthly');
         end
     end
 end
@@ -5007,6 +5111,55 @@ function [bikeCounts, modeCounts, weekStarts, validIdx] = prepareWeeklyModalityD
     bikeCounts = bikeCounts(validIdx);
     modeCounts = modeCounts(validIdx);
     weekStarts = weekStarts(validIdx);
+end
+
+function [bikeCounts, modeCounts, monthStarts, validIdx] = prepareMonthlyModalityData(locationDataStruct, analysis, modeColumnName)
+    % Prepare monthly bike counts and monthly counts for another modality
+    
+    % Extract the data timetable from the structure
+    data = locationDataStruct.data;
+    
+    % Check if the mode column exists
+    if ~ismember(modeColumnName, data.Properties.VariableNames)
+        warning('Mode column "%s" not found in data', modeColumnName);
+        bikeCounts = [];
+        modeCounts = [];
+        monthStarts = [];
+        validIdx = [];
+        return;
+    end
+    
+    % Calculate monthly totals for bikes using existing function
+    bikeAnalysis = analysis;
+    bikeAnalysis.modeString = 'Bike Total';
+    monthlyBikeData = calculateMonthlyTotals(locationDataStruct, bikeAnalysis);
+    
+    % Calculate monthly totals for the comparison mode
+    modeAnalysis = analysis;
+    modeAnalysis.modeString = modeColumnName;
+    monthlyModeData = calculateMonthlyTotals(locationDataStruct, modeAnalysis);
+    
+    % Find common month starts
+    [commonMonths, ia, ib] = intersect(monthlyBikeData.monthStarts, monthlyModeData.monthStarts);
+    
+    if isempty(commonMonths)
+        bikeCounts = [];
+        modeCounts = [];
+        monthStarts = [];
+        validIdx = [];
+        return;
+    end
+    
+    % Extract counts for common months
+    bikeCounts = monthlyBikeData.rawCounts(ia);
+    modeCounts = monthlyModeData.rawCounts(ib);
+    monthStarts = commonMonths;
+    
+    % Remove NaN values
+    validIdx = ~isnan(bikeCounts) & ~isnan(modeCounts);
+    bikeCounts = bikeCounts(validIdx);
+    modeCounts = modeCounts(validIdx);
+    monthStarts = monthStarts(validIdx);
 end
 
 function [trendParams, trendStats] = calculateLocationTrend(xData, yData)
@@ -5063,15 +5216,23 @@ function [trendParams, trendStats] = calculateLocationTrend(xData, yData)
     end
 end
 
-function formatModalityCorrelationPlot(currentMode, analysis, style, modeCounts, bikeCounts)
+function formatModalityCorrelationPlot(currentMode, analysis, style, modeCounts, bikeCounts, timePeriod)
     % Format the modality correlation scatter plot
+    % timePeriod: 'weekly' or 'monthly'
     
-    xlabel(['Weekly ' currentMode.displayName], ...
+    if nargin < 6
+        timePeriod = 'weekly';  % Default for backward compatibility
+    end
+    
+    % Capitalize first letter for display
+    timePeriodDisplay = [upper(timePeriod(1)) timePeriod(2:end)];
+    
+    xlabel([timePeriodDisplay ' ' currentMode.displayName], ...
         'FontSize', style.labelFontSize, 'FontWeight', 'bold');
-    ylabel('Weekly Bike Counts', ...
+    ylabel([timePeriodDisplay ' Bike Counts'], ...
         'FontSize', style.labelFontSize, 'FontWeight', 'bold');
     
-    title(sprintf('Weekly Bike Counts vs %s', currentMode.displayName), ...
+    title(sprintf('%s Bike Counts vs %s', timePeriodDisplay, currentMode.displayName), ...
         'FontSize', style.titleFontSize);
     
     % Add subtitle with date range
@@ -5160,11 +5321,26 @@ function addModalityCorrelationStatsBox(corrStats, trendStats, style, nPoints, m
         'Margin', 5);
 end
 
-function printModalityCorrelationSummary(currentMode, corrStats, trendStats, nPoints)
+function printModalityCorrelationSummary(currentMode, corrStats, trendStats, nPoints, timePeriod)
     % Print correlation summary to console
+    % timePeriod: 'weekly' or 'monthly'
     
-    fprintf('\n=== Weekly Bike vs %s Correlation Analysis ===\n', currentMode.shortName);
-    fprintf('Sample Size: %d weeks\n', nPoints);
+    if nargin < 5
+        timePeriod = 'weekly';  % Default for backward compatibility
+    end
+    
+    % Capitalize first letter for display
+    timePeriodDisplay = [upper(timePeriod(1)) timePeriod(2:end)];
+    
+    % Get the appropriate unit name
+    if strcmp(timePeriod, 'weekly')
+        unitName = 'weeks';
+    else
+        unitName = 'months';
+    end
+    
+    fprintf('\n=== %s Bike vs %s Correlation Analysis ===\n', timePeriodDisplay, currentMode.shortName);
+    fprintf('Sample Size: %d %s\n', nPoints, unitName);
     fprintf('Pearson Correlation: r = %.3f (R² = %.3f)\n', corrStats.pearsonR, corrStats.rSquared);
     fprintf('Spearman Correlation: ρ = %.3f\n', corrStats.spearmanRho);
     
