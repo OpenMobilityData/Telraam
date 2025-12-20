@@ -3,10 +3,10 @@
 %
 % Supports two types of bike counting sources:
 %   - Telraam: Machine vision counters (daylight-only, operated by residents)
-%   - EVO: Inductive loop counters (24/7, operated by the city)
+%   - ZELT Evo: Eco-Compteur inductive loop counters (24/7, operated by the city)
 %
 % The script processes Telraam data with daylight corrections first,
-% then injects EVO data (no daylight processing needed) for multi-location
+% then injects ZELT Evo data (no daylight processing needed) for multi-location
 % comparison charts.
 
 clear all; close all; clc;
@@ -17,7 +17,7 @@ westernSegmentName = 'rue de Terrebonne @ King Edward';
 easternSegmentName = 'rue de Terrebonne @ Draper';
 evoSegmentName = 'rue de Terrebonne @ Kensington';
 
-% Locations to analyze (Telraam sources only - EVO added after daylight processing)
+% Locations to analyze (Telraam sources only - ZELT Evo added after daylight processing)
 locations = {
     struct('name', easternSegmentName, ...
            'fileStem2024', 'raw-data-2024East60', ...
@@ -31,11 +31,11 @@ locations = {
            'source', 'Telraam');
 };
 
-% EVO counter location (added separately after Telraam daylight processing)
+% ZELT Evo counter location (added separately after Telraam daylight processing)
 evoLocation = struct('name', evoSegmentName, ...
                      'evoFile', 'Comptage_permanent_Terrebonne_26072025_15112025.xlsx', ...
                      'plotColor', [0.8 0 0.8], ...  % Magenta
-                     'source', 'EVO');
+                     'source', 'ZELT Evo');
 
 %locations = {locations{2}}; % Use to select a single location
 
@@ -159,8 +159,8 @@ for i = 1:length(locations)
     locationData.(fieldName).locationInfo = location;
 end
 
-%% Load and Add EVO Counter Data (no daylight processing needed)
-fprintf('Loading EVO counter data for %s...\n', evoLocation.name);
+%% Load and Add ZELT Evo Counter Data (no daylight processing needed)
+fprintf('Loading ZELT Evo counter data for %s...\n', evoLocation.name);
 try
     evoData = loadEvoCounterData(evoLocation, analysis);
     
@@ -174,13 +174,13 @@ try
         fieldName = matlab.lang.makeValidName(evoLocation.name);
         locationData.(fieldName).data = evoData;
         locationData.(fieldName).locationInfo = evoLocation;
-        fprintf('Successfully loaded %s EVO observations.\n', num2sepstr(height(evoData), '%.0f'));
+        fprintf('Successfully loaded %s ZELT Evo observations.\n', num2sepstr(height(evoData), '%.0f'));
     else
-        warning('No valid EVO data loaded for %s', evoLocation.name);
+        warning('No valid ZELT Evo data loaded for %s', evoLocation.name);
     end
 catch ME
-    warning('Failed to load EVO data: %s', ME.message);
-    fprintf('EVO file may not exist: %s\n', evoLocation.evoFile);
+    warning('Failed to load ZELT Evo data: %s', ME.message);
+    fprintf('ZELT Evo file may not exist: %s\n', evoLocation.evoFile);
 end
 
 %% Get Weather Data (once for all locations) - with caching
@@ -278,7 +278,7 @@ if length(fieldnames(telraamLocationData)) > 1
     plotLocationCorrelation(telraamLocationData, analysis, plots, style, 'daily');
 end
 
-% Generate Bike vs Other Modalities Correlation Plots (Telraam only - EVO doesn't have pedestrian data)
+% Generate Bike vs Other Modalities Correlation Plots (Telraam only - ZELT Evo doesn't have pedestrian data)
 telraamLocationData = filterLocationDataBySource(locationData, 'Telraam');
 plotBikeModalityCorrelation(telraamLocationData, analysis, plots, style);
 
@@ -287,7 +287,7 @@ plotModalityPieCharts(telraamLocationData, analysis, style);
 plotModalityBarChart(telraamLocationData, analysis, style);
 
 %% Generate Multi-Modal Plots for Telraam Locations Only
-% (EVO doesn't have pedestrian data)
+% (ZELT Evo doesn't have pedestrian data)
 if multiModal.enabled
     % Get Telraam location names only
     telraamLocationData = filterLocationDataBySource(locationData, 'Telraam');
@@ -3502,7 +3502,7 @@ function filteredLocationData = filterNightData(locationData, weatherData)
     % This provides a more accurate representation of detection capabilities
     % during periods when the computer vision system can actually detect bikes/pedestrians
     %
-    % NOTE: EVO counter data is NOT filtered as it counts 24/7 via inductive loops
+    % NOTE: ZELT Evo counter data is NOT filtered as it counts 24/7 via inductive loops
     
     fprintf('Filtering nighttime data where bike/pedestrian detection is not possible...\n');
     
@@ -3517,9 +3517,9 @@ function filteredLocationData = filterNightData(locationData, weatherData)
         
         fprintf('Processing location: %s\n', locationInfo.name);
         
-        % Skip night filtering for EVO sources (they count 24/7)
-        if isfield(locationInfo, 'source') && strcmp(locationInfo.source, 'EVO')
-            fprintf('  Skipping night filter for EVO source (counts 24/7)\n');
+        % Skip night filtering for ZELT Evo sources (they count 24/7)
+        if isfield(locationInfo, 'source') && strcmp(locationInfo.source, 'ZELT Evo')
+            fprintf('  Skipping night filter for ZELT Evo source (counts 24/7)\n');
             filteredLocationData.(locationName) = struct();
             filteredLocationData.(locationName).data = data.data;
             filteredLocationData.(locationName).locationInfo = locationInfo;
@@ -6437,20 +6437,20 @@ function monthlyData = calculateCorridorMonthlyData(locationData, analysis)
     monthlyData.counts = corridorMonthly.mean_Count;
 end
 
-%% ======================== EVO COUNTER FUNCTIONS ========================
+%% ======================== ZELT EVO COUNTER FUNCTIONS ========================
 
 function evoTable = loadEvoCounterData(evoLocation, analysis)
-    % Load EVO counter data from Excel file with specific format
-    % The EVO file has:
+    % Load ZELT Evo counter data from Excel file with specific format
+    % The ZELT Evo file has:
     %   - Row 1: Period description
     %   - Row 2: Empty
     %   - Row 3: Headers (Time, Rue Terrebonne Cyclist, IN_est, OUT_ouest, Vehicles, Total)
     %   - Row 4+: Data
     
-    fprintf('Reading EVO Excel file: %s\n', evoLocation.evoFile);
+    fprintf('Reading ZELT Evo Excel file: %s\n', evoLocation.evoFile);
     
     if ~exist(evoLocation.evoFile, 'file')
-        warning('EVO file not found: %s', evoLocation.evoFile);
+        warning('ZELT Evo file not found: %s', evoLocation.evoFile);
         evoTable = table();
         return;
     end
@@ -6467,7 +6467,7 @@ function evoTable = loadEvoCounterData(evoLocation, analysis)
     try
         rawTable = readtable(evoLocation.evoFile, opts);
     catch ME
-        warning('Error reading EVO file with predefined options: %s. Trying alternate method.', ME.message);
+        warning('Error reading ZELT Evo file with predefined options: %s. Trying alternate method.', ME.message);
         
         % Alternate method: read as raw data
         rawTable = readtable(evoLocation.evoFile, 'Range', 'A4', 'ReadVariableNames', false);
@@ -6501,12 +6501,12 @@ function evoTable = loadEvoCounterData(evoLocation, analysis)
     rawTable = rawTable(validRows, :);
     
     if isempty(rawTable) || height(rawTable) == 0
-        warning('No valid data found in EVO file');
+        warning('No valid data found in ZELT Evo file');
         evoTable = table();
         return;
     end
     
-    fprintf('Loaded %d raw EVO observations\n', height(rawTable));
+    fprintf('Loaded %d raw ZELT Evo observations\n', height(rawTable));
     
     % Convert to format compatible with existing locationData structure
     evoTable = convertEvoToTelraamFormat(rawTable, analysis);
@@ -6515,11 +6515,11 @@ function evoTable = loadEvoCounterData(evoLocation, analysis)
     evoTable = evoTable(evoTable.('Date and Time (Local)') >= analysis.startTime & ...
                         evoTable.('Date and Time (Local)') <= analysis.endTime, :);
     
-    fprintf('After date filtering: %d EVO observations\n', height(evoTable));
+    fprintf('After date filtering: %d ZELT Evo observations\n', height(evoTable));
 end
 
 function evoTable = convertEvoToTelraamFormat(rawEvoTable, analysis)
-    % Convert EVO data format to match Telraam format for compatibility
+    % Convert ZELT Evo data format to match Telraam format for compatibility
     % with existing analysis functions
     
     n = height(rawEvoTable);
@@ -6531,10 +6531,10 @@ function evoTable = convertEvoToTelraamFormat(rawEvoTable, analysis)
     evoTable.('Date and Time (Local)') = rawEvoTable.Time;
     evoTable.('Bike Total') = rawEvoTable.Cyclist_Total;
     
-    % Uptime always 1 for EVO (continuous counting)
+    % Uptime always 1 for ZELT Evo (continuous counting)
     evoTable.Uptime = ones(n, 1);
     
-    % EVO doesn't have pedestrian/vehicle/night data in the same format
+    % ZELT Evo doesn't have pedestrian/vehicle/night data in the same format
     % Set placeholders that won't break downstream functions
     evoTable.('Pedestrian Total') = zeros(n, 1);
     evoTable.('Car Total') = zeros(n, 1);
@@ -6542,7 +6542,7 @@ function evoTable = convertEvoToTelraamFormat(rawEvoTable, analysis)
         evoTable.('Car Total') = rawEvoTable.Vehicles;
     end
     evoTable.('Large vehicle Total') = zeros(n, 1);
-    evoTable.('Night Total') = zeros(n, 1);  % EVO counts 24/7
+    evoTable.('Night Total') = zeros(n, 1);  % ZELT Evo counts 24/7
     evoTable.('Speed V85 km/h') = nan(n, 1);  % Not available
     
     % Add temporal columns (matching addTemporalColumns)
@@ -6554,7 +6554,7 @@ function evoTable = convertEvoToTelraamFormat(rawEvoTable, analysis)
     evoTable.isWeekday = ismember(evoTable.dayOfWeekCat, weekdays);
     evoTable.weekStartDateTimes = dateshift(dateshift(evoTable.('Date and Time (Local)'),'dayofweek','Monday','previous'),'start','day');
     
-    % Daylight handling: EVO counts 24/7, so set all to daylight=true
+    % Daylight handling: ZELT Evo counts 24/7, so set all to daylight=true
     % This ensures no daylight filtering is applied
     evoTable.Daylight = true(n, 1);
     evoTable.DaylightUptime = ones(n, 1);
@@ -6567,7 +6567,7 @@ function evoTable = convertEvoToTelraamFormat(rawEvoTable, analysis)
     evoTable.yearOfMondayInWeek(januaryIndicesToChange) = evoTable.yearOfMondayInWeek(januaryIndicesToChange) - 1;
     evoTable.yearWeekKey = evoTable.yearOfMondayInWeek + evoTable.weekOfYear./100;
     
-    % EVO doesn't need uptime or daylight corrections
+    % ZELT Evo doesn't need uptime or daylight corrections
     % Set adjusted counts equal to raw counts
     evoTable.AdjustedCountsUptime = evoTable.('Bike Total');
     evoTable.AdjustedCountsUptimeDaylight = evoTable.('Bike Total');
@@ -6583,9 +6583,9 @@ function sourceLabel = getSourceLabel(locationInfo)
     if isfield(locationInfo, 'source')
         source = locationInfo.source;
         if strcmp(source, 'Telraam')
-            sourceLabel = 'Telraam Raw';  % Distinguish from EVO and potential Telraam Corrected
-        elseif strcmp(source, 'EVO')
-            sourceLabel = 'EVO';  % Indicate EVO inductive counter
+            sourceLabel = 'Telraam Raw';  % Distinguish from ZELT Evo and potential Telraam Corrected
+        elseif strcmp(source, 'ZELT Evo')
+            sourceLabel = 'ZELT Evo';  % Eco-Compteur ZELT Evo inductive loop counter
         else
             sourceLabel = source;
         end
@@ -6599,7 +6599,7 @@ function filteredData = filterLocationDataBySource(locationData, sourceType)
     %
     % Parameters:
     %   locationData - struct with location data
-    %   sourceType - string: 'Telraam', 'EVO', or 'all'
+    %   sourceType - string: 'Telraam', 'ZELT Evo', or 'all'
     %
     % Returns:
     %   filteredData - struct with only matching locations
