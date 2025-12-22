@@ -54,8 +54,14 @@ analysis = struct( ...
     'uptimeThreshold', 0.0, ...
     'maxUptimeCorrection', 1.0, ...
     'truncationCutoffTime', timeofday(datetime('today')+hours(15)), ...
-    'daylightCorrectionRatioWD', 1.65, ...
-    'daylightCorrectionRatioWE', 1.37, ...
+    'daylightCorrectionRatioWD', 1.65, ...  % Default; will be overwritten if computed
+    'daylightCorrectionRatioWE', 1.37, ...  % Default; will be overwritten if computed
+    'computeDaylightRatios', true, ...  % Set true to compute ratios from ground truth period
+    'groundTruthPeriod', struct( ...
+        'startMonth', 6, ...  % June
+        'endMonth', 7, ...    % July (long daylight, minimal cutoff impact)
+        'year', 2025 ...      % Year for ground truth period
+    ), ...
     'includePartialMonths', false, ...
     'weekdaysOnly', false, ... % If 'true' may cause issues with weather API
     'outlierDetection', struct( ...
@@ -76,6 +82,7 @@ analysis = struct( ...
 %dateSpan = 'September2025';
 %dateSpan = 'fullMonthsWest';
 %dateSpan = 'fullMonthsEast';
+dateSpan = 'access2info1';
 
 if exist('dateSpan', 'var')
     if strcmp(dateSpan,'winter')
@@ -96,6 +103,10 @@ if exist('dateSpan', 'var')
     elseif strcmp(dateSpan,'September2025')
         analysis.startTime = datetime(2025,09,01,00,00,01);
         analysis.endTime = datetime(2025,09,31,23,59,59);
+    elseif strcmp(dateSpan,'access2info1')
+        %analysis.startTime = datetime(2025,07,26,00,00,01);
+        analysis.startTime = datetime(2025,08,01,00,00,01);
+        analysis.endTime = datetime(2025,11,15,23,59,59);
     elseif strcmp(dateSpan,'fullMonthsWest')
         analysis.startTime = datetime(2024,09,01,00,00,01);
     elseif strcmp(dateSpan,'fullMonthsEast')
@@ -104,14 +115,35 @@ if exist('dateSpan', 'var')
 end
 
 % Plot configuration - easy to turn elements on/off
+% Adjustment display options:
+%   showRawCounts=true,  showAdjustedCounts=false  -> Raw counts only (default)
+%   showRawCounts=true,  showAdjustedCounts=true   -> Both raw and adjusted
+%   showRawCounts=false, showAdjustedCounts=true   -> Adjusted counts only
+% Hourly pattern normalization options:
+%   hourlyNormalization: 'none', 'mean', or 'median'
+%   hourlyNormalizationTarget: target value for normalized curves (default 100)
+% Hourly analysis plots:
+%   showCumulativePercentile: cumulative % of daily counts by hour (daylight effect analysis)
+%   showHourlyHeatmap: month x hour heatmap of normalized counts
+%   heatmapNormalization: 'row' (normalize each month) or 'none' (show absolute values)
+%   cutoffType: 'fixed' (use cutoffHour), 'sunset' (avg sunset per month), or 
+%               'threshold' (time when cutoffThresholdPct is reached)
 plots = struct( ...
     'showRawCounts', true, ...
-    'showAdjustedCounts', false, ...  % Turn off for first example
+    'showAdjustedCounts', false, ...  % Set true to show daylight-adjusted estimates
     'showTruncatedCounts', false, ...
     'showWeather', true, ...
-    'showPrecipitationBubbles', true, ...  % Turn off for first example
-    'plotTypes', {{'daily','weekly','monthly'}}, ...  % Only daily for now
-    'combinedPlots', true ...
+    'showPrecipitationBubbles', true, ...
+    'plotTypes', {{'daily','weekly','monthly'}}, ...
+    'combinedPlots', true, ...
+    'hourlyNormalization', 'none', ...  % 'none', 'mean', or 'median'
+    'hourlyNormalizationTarget', 100, ...  % Target value for normalized mean/median
+    'showCumulativePercentile', true, ...  % Show cumulative % of daily counts by hour
+    'showHourlyHeatmap', true, ...  % Show month x hour heatmap
+    'heatmapNormalization', 'row', ...  % 'row' (normalize each month) or 'none' (absolute)
+    'cutoffType', 'threshold', ...  % 'fixed', 'sunset', or 'threshold'
+    'cutoffHour', 15, ...  % Hour for fixed cutoff (3pm = 15)
+    'cutoffThresholdPct', 99.0 ...  % Percentage threshold for 'threshold' mode
 );
 
 % Plotting style parameters
@@ -134,6 +166,44 @@ multiModal = struct( ...
     'plotWeather', true ...
 );
 
+
+%% Load ZELT Evo Counter Data First (needed for ratio computation)
+% ZELT Evo has 24-hour coverage, making it ideal for computing daylight correction ratios
+fprintf('Loading ZELT Evo counter data for %s...\n', evoLocation.name);
+evoDataLoaded = false;
+try
+    evoData = loadEvoCounterData(evoLocation, analysis);
+    
+    if ~isempty(evoData) && height(evoData) > 0
+        evoDataLoaded = true;
+        fprintf('Successfully loaded %s ZELT Evo observations.\n', num2sepstr(height(evoData), '%.0f'));
+    else
+        warning('No valid ZELT Evo data loaded for %s', evoLocation.name);
+    end
+catch ME
+    warning('Failed to load ZELT Evo data: %s', ME.message);
+    fprintf('ZELT Evo file may not exist: %s\n', evoLocation.evoFile);
+end
+
+%% Compute Daylight Correction Ratios from Ground Truth Period
+% Use ZELT Evo data (24-hour coverage) to determine the ratio of 
+% total daily counts to pre-cutoff counts during summer months
+if analysis.computeDaylightRatios && evoDataLoaded
+    fprintf('\n=== Computing Daylight Correction Ratios from ZELT Evo Ground Truth ===\n');
+    [ratioWD, ratioWE] = computeDaylightCorrectionRatios(evoData, analysis);
+    
+    if ~isnan(ratioWD) && ~isnan(ratioWE)
+        analysis.daylightCorrectionRatioWD = ratioWD;
+        analysis.daylightCorrectionRatioWE = ratioWE;
+        fprintf('Using computed ratios: Weekday=%.3f, Weekend=%.3f\n', ratioWD, ratioWE);
+    else
+        fprintf('Using default ratios: Weekday=%.3f, Weekend=%.3f\n', ...
+            analysis.daylightCorrectionRatioWD, analysis.daylightCorrectionRatioWE);
+    end
+else
+    fprintf('Using configured ratios: Weekday=%.3f, Weekend=%.3f\n', ...
+        analysis.daylightCorrectionRatioWD, analysis.daylightCorrectionRatioWE);
+end
 
 %% Load and Process Data for All Telraam Locations
 locationData = struct();
@@ -159,28 +229,20 @@ for i = 1:length(locations)
     locationData.(fieldName).locationInfo = location;
 end
 
-%% Load and Add ZELT Evo Counter Data (no daylight processing needed)
-fprintf('Loading ZELT Evo counter data for %s...\n', evoLocation.name);
-try
+%% Add ZELT Evo Data to locationData (reprocess with computed ratios)
+if evoDataLoaded
+    % Reprocess ZELT Evo data with the computed ratios
     evoData = loadEvoCounterData(evoLocation, analysis);
     
-    if ~isempty(evoData) && height(evoData) > 0
-        % Filter to weekdays if requested
-        if analysis.weekdaysOnly
-            evoData = evoData(evoData.isWeekday==1,:);
-        end
-        
-        % Store in locationData structure
-        fieldName = matlab.lang.makeValidName(evoLocation.name);
-        locationData.(fieldName).data = evoData;
-        locationData.(fieldName).locationInfo = evoLocation;
-        fprintf('Successfully loaded %s ZELT Evo observations.\n', num2sepstr(height(evoData), '%.0f'));
-    else
-        warning('No valid ZELT Evo data loaded for %s', evoLocation.name);
+    % Filter to weekdays if requested
+    if analysis.weekdaysOnly
+        evoData = evoData(evoData.isWeekday==1,:);
     end
-catch ME
-    warning('Failed to load ZELT Evo data: %s', ME.message);
-    fprintf('ZELT Evo file may not exist: %s\n', evoLocation.evoFile);
+    
+    % Store in locationData structure
+    fieldName = matlab.lang.makeValidName(evoLocation.name);
+    locationData.(fieldName).data = evoData;
+    locationData.(fieldName).locationInfo = evoLocation;
 end
 
 %% Get Weather Data (once for all locations) - with caching
@@ -259,7 +321,7 @@ plotDayOfWeekPatterns(locationData, analysis, plots, style);
 plotCombinedMonthly(locationData, weatherData, analysis, plots, style);
 
 %% Generate Hourly Pattern Plots (if enabled)
-plotHourlyPatterns(locationData, analysis, plots, style);
+plotHourlyPatterns(locationData, weatherData, analysis, plots, style);
 
 %% Generate Temperature Scatter Plot
 plotTemperatureScatterWeekly(locationData, weatherData, analysis, plots, style);
@@ -480,11 +542,12 @@ function plotCombinedDaily(locationData, weatherData, analysis, plots, style)
         
         % Plot adjusted counts if enabled
         if plots.showAdjustedCounts
+            adjustedLabel = getAdjustedSourceLabel(locationInfo);
             h2 = plot(dailyData.dates, dailyData.adjustedCounts, '--', ...
                 'LineWidth', style.plotLineWidth * 0.3, ...
                 'Color', locationInfo.plotColor * 0.7, ...
-                'DisplayName', sprintf('%s Telraam Corrected ( Min = %s ; Max = %s ; Total = %s )', ...
-                    locationInfo.name, ...
+                'DisplayName', sprintf('%s %s ( Min = %s ; Max = %s ; Total = %s )', ...
+                    locationInfo.name, adjustedLabel, ...
                     num2sepstr(min(dailyData.adjustedCounts), '%.0f'), ...
                     num2sepstr(max(dailyData.adjustedCounts), '%.0f'), ...
                     num2sepstr(sum(dailyData.adjustedCounts), '%.0f')));
@@ -777,11 +840,12 @@ function plotCombinedWeekly(locationData, weatherData, analysis, plots, style)
         
         % Plot adjusted counts if enabled
         if plots.showAdjustedCounts
+            adjustedLabel = getAdjustedSourceLabel(locationInfo);
             h2 = plot(weeklyData.weekStarts, weeklyData.adjustedCounts, '--', ...
                 'LineWidth', style.plotLineWidth * 0.3, ...
                 'Color', locationInfo.plotColor * 0.7, ...
-                'DisplayName', sprintf('%s Telraam Corrected ( Min = %s ; Max = %s ; Total = %s )', ...
-                    locationInfo.name, ...
+                'DisplayName', sprintf('%s %s ( Min = %s ; Max = %s ; Total = %s )', ...
+                    locationInfo.name, adjustedLabel, ...
                     num2sepstr(min(weeklyData.adjustedCounts), '%.0f'), ...
                     num2sepstr(max(weeklyData.adjustedCounts), '%.0f'), ...
                     num2sepstr(sum(weeklyData.adjustedCounts), '%.0f')));
@@ -1012,13 +1076,14 @@ function plotCombinedMonthly(locationData, weatherData, analysis, plots, style)
 
         % Plot adjusted counts if enabled
         if plots.showAdjustedCounts
+            adjustedLabel = getAdjustedSourceLabel(locationInfo);
             h2 = plot(monthlyData.monthStarts, monthlyData.adjustedCounts, '--', ...
                 'LineWidth', style.plotLineWidth * 0.3, ...
                 'MarkerSize', style.plotLineWidth * 1.5, ...
                 'Color', locationInfo.plotColor * 0.7, ...
                 'MarkerFaceColor', locationInfo.plotColor * 0.7, ...
-                'DisplayName', sprintf('%s Telraam Corrected ( Min = %s ; Max = %s ; Total = %s )', ...
-                locationInfo.name, ...
+                'DisplayName', sprintf('%s %s ( Min = %s ; Max = %s ; Total = %s )', ...
+                locationInfo.name, adjustedLabel, ...
                 num2sepstr(min(monthlyData.adjustedCounts), '%.0f'), ...
                 num2sepstr(max(monthlyData.adjustedCounts), '%.0f'), ...
                 num2sepstr(sum(monthlyData.adjustedCounts), '%.0f')));
@@ -1538,9 +1603,12 @@ function formatMultiModalPlot(timeScale, multiModal, plots, style, weatherData)
     end
 end
 
-function plotHourlyPatterns(locationData, analysis, plots, style)
+function plotHourlyPatterns(locationData, weatherData, analysis, plots, style)
     % Plot average hourly traffic patterns for weekdays and weekends
     % Includes both grand averages and monthly segregation
+    
+    % Compute average sunset times by month from weatherData
+    monthlySunsets = computeMonthlySunsetTimes(weatherData);
     
     locationNames = fieldnames(locationData);
     
@@ -1557,8 +1625,66 @@ function plotHourlyPatterns(locationData, analysis, plots, style)
         plotGrandAverageHourly(hourlyData, analysis, style, locationInfo.name);
         
         % Create monthly segregated plots for weekdays and weekends
-        plotMonthlyHourlyPatterns(monthlyHourlyData, analysis, style, locationInfo.name, 'Weekdays');
-        plotMonthlyHourlyPatterns(monthlyHourlyData, analysis, style, locationInfo.name, 'Weekends');
+        plotMonthlyHourlyPatterns(monthlyHourlyData, analysis, plots, style, locationInfo.name, 'Weekdays');
+        plotMonthlyHourlyPatterns(monthlyHourlyData, analysis, plots, style, locationInfo.name, 'Weekends');
+        
+        % Create cumulative percentile plots if enabled
+        if isfield(plots, 'showCumulativePercentile') && plots.showCumulativePercentile
+            plotCumulativePercentile(monthlyHourlyData, analysis, plots, style, locationInfo.name, 'Weekdays', monthlySunsets);
+            plotCumulativePercentile(monthlyHourlyData, analysis, plots, style, locationInfo.name, 'Weekends', monthlySunsets);
+        end
+        
+        % Create heatmap plots if enabled
+        if isfield(plots, 'showHourlyHeatmap') && plots.showHourlyHeatmap
+            plotHourlyHeatmap(monthlyHourlyData, analysis, plots, style, locationInfo.name, 'Weekdays', monthlySunsets);
+            plotHourlyHeatmap(monthlyHourlyData, analysis, plots, style, locationInfo.name, 'Weekends', monthlySunsets);
+        end
+    end
+end
+
+function monthlySunsets = computeMonthlySunsetTimes(weatherData)
+    % Compute average sunset time (as hour of day) for each month
+    % Returns a containers.Map with keys like 'Jul 2025' and values as decimal hours
+    
+    monthlySunsets = containers.Map();
+    
+    if ~isfield(weatherData, 'sunset') || isempty(weatherData.sunset)
+        return;
+    end
+    
+    dates = weatherData.dates;
+    sunsets = weatherData.sunset;
+    
+    % Group by month
+    for i = 1:length(dates)
+        if iscell(sunsets)
+            sunsetTime = sunsets{i};
+        else
+            sunsetTime = sunsets(i);
+        end
+        
+        if isnat(sunsetTime)
+            continue;
+        end
+        
+        monthKey = datestr(dates(i), 'mmm yyyy');
+        sunsetHour = hour(sunsetTime) + minute(sunsetTime)/60;
+        
+        if isKey(monthlySunsets, monthKey)
+            % Accumulate for averaging
+            existing = monthlySunsets(monthKey);
+            monthlySunsets(monthKey) = [existing; sunsetHour];
+        else
+            monthlySunsets(monthKey) = sunsetHour;
+        end
+    end
+    
+    % Compute averages
+    allKeys = keys(monthlySunsets);
+    for i = 1:length(allKeys)
+        monthKey = allKeys{i};
+        values = monthlySunsets(monthKey);
+        monthlySunsets(monthKey) = mean(values);
     end
 end
 
@@ -1801,8 +1927,9 @@ function monthlyHourlyData = calculateMonthlyHourlyPatterns(locationDataStruct, 
     end
 end
 
-function plotMonthlyHourlyPatterns(monthlyHourlyData, analysis, style, locationName, dayType)
+function plotMonthlyHourlyPatterns(monthlyHourlyData, analysis, plots, style, locationName, dayType)
     % Plot hourly patterns segregated by month
+    % Supports optional normalization to facilitate shape comparison across months
     
     figure('Name', [analysis.modeDisplayString ' - Hourly by Month - ' dayType ' - ' locationName], 'NumberTitle', 'off', 'Position', [408 126 1132 921]);
     hold on
@@ -1819,10 +1946,32 @@ function plotMonthlyHourlyPatterns(monthlyHourlyData, analysis, style, locationN
         times = monthlyHourlyData.weekendTimes;
     end
     
+    % Get normalization settings
+    normMethod = plots.hourlyNormalization;
+    normTarget = plots.hourlyNormalizationTarget;
+    isNormalized = ~strcmp(normMethod, 'none');
+    
     % Plot each month's pattern
     for monthIdx = 1:length(monthlyHourlyData.months)
         if ~isempty(patterns{monthIdx}) && ~isempty(times{monthIdx})
-            monthTotal = sum(patterns{monthIdx});
+            patternData = patterns{monthIdx};
+            monthTotal = sum(patternData);
+            
+            % Apply normalization if requested
+            if isNormalized
+                if strcmp(normMethod, 'mean')
+                    currentValue = mean(patternData);
+                elseif strcmp(normMethod, 'median')
+                    currentValue = median(patternData);
+                else
+                    currentValue = 1;  % Fallback
+                end
+                
+                if currentValue > 0
+                    scaleFactor = normTarget / currentValue;
+                    patternData = patternData * scaleFactor;
+                end
+            end
             
             % Use subtle colors for individual months, emphasize most recent
             if monthIdx == length(monthlyHourlyData.months)
@@ -1835,7 +1984,8 @@ function plotMonthlyHourlyPatterns(monthlyHourlyData, analysis, style, locationN
                 lineWidth = style.plotLineWidth * 0.5;
             end
             
-            h = plot(times{monthIdx}, patterns{monthIdx}, '-', ...
+            % Create legend label (show original total, not normalized)
+            h = plot(times{monthIdx}, patternData, '-', ...
                 'LineWidth', lineWidth, ...
                 'Color', [colorMap(monthIdx, :) alpha], ...
                 'DisplayName', sprintf('%s (%s/day)', ...
@@ -1845,8 +1995,13 @@ function plotMonthlyHourlyPatterns(monthlyHourlyData, analysis, style, locationN
         end
     end
     
-    % Format plot
-    formatHourlyPlot(analysis, style, locationName, [dayType ' by Month']);
+    % Format plot with normalization indicator
+    if isNormalized
+        plotTypeStr = sprintf('%s by Month (normalized by %s to %d)', dayType, normMethod, normTarget);
+    else
+        plotTypeStr = [dayType ' by Month'];
+    end
+    formatHourlyPlot(analysis, style, locationName, plotTypeStr, isNormalized, normTarget);
     
     % Add legend
     if ~isempty(plotHandles)
@@ -1857,10 +2012,24 @@ function plotMonthlyHourlyPatterns(monthlyHourlyData, analysis, style, locationN
     hold off
 end
 
-function formatHourlyPlot(analysis, style, locationName, plotType)
+function formatHourlyPlot(analysis, style, locationName, plotType, isNormalized, normTarget)
     % Format the hourly pattern plot
+    % Optional parameters: isNormalized (default false), normTarget (default 100)
     
-    ylabel('Hourly Count', 'FontSize', style.labelFontSize + 2, 'FontWeight', 'bold');
+    if nargin < 5
+        isNormalized = false;
+    end
+    if nargin < 6
+        normTarget = 100;
+    end
+    
+    % Set y-axis label based on normalization
+    if isNormalized
+        ylabel(sprintf('Normalized Hourly Count (target = %d)', normTarget), ...
+            'FontSize', style.labelFontSize + 2, 'FontWeight', 'bold');
+    else
+        ylabel('Hourly Count', 'FontSize', style.labelFontSize + 2, 'FontWeight', 'bold');
+    end
     xlabel('Time of Day', 'FontSize', style.labelFontSize);
     
     title([plotType ' Hourly ' analysis.modeDisplayString ' (' locationName ')'], ...
@@ -1883,6 +2052,495 @@ function formatHourlyPlot(analysis, style, locationName, plotType)
     % Set x-axis ticks every 4 hours
     xticks(hours(0:4:24));
     xticklabels({'00:00', '04:00', '08:00', '12:00', '16:00', '20:00', '24:00'});
+end
+
+function plotCumulativePercentile(monthlyHourlyData, analysis, plots, style, locationName, dayType, monthlySunsets)
+    % Plot cumulative percentage of daily counts by hour, segregated by month
+    % This visualization helps understand what fraction of daily cycling
+    % has occurred by any given hour, making daylight cutoff effects visible
+    %
+    % cutoffType options:
+    %   'fixed' - uses fixed cutoffHour for all months, shows % at that time
+    %   'sunset' - uses average sunset time per month, shows % at sunset
+    %   'threshold' - finds time when cutoffThresholdPct is reached
+    
+    % Determine cutoff mode
+    cutoffType = 'fixed';
+    if isfield(plots, 'cutoffType')
+        cutoffType = plots.cutoffType;
+    end
+    
+    % Get parameters for each mode
+    fixedCutoffHour = 15;
+    if isfield(plots, 'cutoffHour')
+        fixedCutoffHour = plots.cutoffHour;
+    end
+    
+    thresholdPct = 90;
+    if isfield(plots, 'cutoffThresholdPct')
+        thresholdPct = plots.cutoffThresholdPct;
+    end
+    
+    % Set figure name based on cutoff type
+    switch cutoffType
+        case 'sunset'
+            figSuffix = ' (sunset cutoff)';
+        case 'threshold'
+            figSuffix = sprintf(' (%d%% threshold)', thresholdPct);
+        otherwise
+            figSuffix = '';
+    end
+    
+    figure('Name', [analysis.modeDisplayString ' - Cumulative % - ' dayType ' - ' locationName figSuffix], ...
+        'NumberTitle', 'off', 'Position', [408 126 1132 921]);
+    hold on
+    
+    plotHandles = [];
+    colorMap = lines(length(monthlyHourlyData.months));
+    
+    % Determine which patterns to use
+    if strcmp(dayType, 'Weekdays')
+        patterns = monthlyHourlyData.weekdayPatterns;
+        times = monthlyHourlyData.weekdayTimes;
+    else
+        patterns = monthlyHourlyData.weekendPatterns;
+        times = monthlyHourlyData.weekendTimes;
+    end
+    
+    % Store marker data for all modes
+    markerData = [];  % [hour, percentage, monthIdx]
+    
+    % Plot each month's cumulative curve
+    for monthIdx = 1:length(monthlyHourlyData.months)
+        if ~isempty(patterns{monthIdx}) && ~isempty(times{monthIdx})
+            patternData = patterns{monthIdx};
+            timeData = times{monthIdx};
+            
+            % Convert duration times to hours
+            hoursOfDay = hours(timeData);
+            
+            % Sort by hour (should already be sorted, but ensure it)
+            [hoursOfDay, sortIdx] = sort(hoursOfDay);
+            patternData = patternData(sortIdx);
+            
+            % Calculate cumulative sum and convert to percentage
+            cumSum = cumsum(patternData);
+            totalDaily = sum(patternData);
+            cumPercent = 100 * cumSum / totalDaily;
+            
+            % Get month key for sunset lookup
+            monthKey = datestr(monthlyHourlyData.months(monthIdx), 'mmm yyyy');
+            
+            % Calculate marker position and legend text based on mode
+            switch cutoffType
+                case 'sunset'
+                    if nargin >= 7 && isKey(monthlySunsets, monthKey)
+                        cutoffHour = monthlySunsets(monthKey);
+                    else
+                        cutoffHour = fixedCutoffHour;
+                    end
+                    cutoffPct = interpolatePercentage(hoursOfDay, cumPercent, cutoffHour);
+                    legendStr = sprintf('%s (%.0f%% by sunset %s)', monthKey, cutoffPct, decimalHourToHHMM(cutoffHour));
+                    markerData = [markerData; cutoffHour, cutoffPct, monthIdx];
+                    
+                case 'threshold'
+                    thresholdHour = interpolateHour(hoursOfDay, cumPercent, thresholdPct);
+                    legendStr = sprintf('%s (%d%% at %s)', monthKey, thresholdPct, decimalHourToHHMM(thresholdHour));
+                    markerData = [markerData; thresholdHour, thresholdPct, monthIdx];
+                    
+                otherwise  % 'fixed'
+                    cutoffPct = interpolatePercentage(hoursOfDay, cumPercent, fixedCutoffHour);
+                    legendStr = sprintf('%s (%.0f%% by %d:00)', monthKey, cutoffPct, fixedCutoffHour);
+                    % No per-month markers for fixed mode
+            end
+            
+            % Use subtle colors for older months, emphasize most recent
+            if monthIdx == length(monthlyHourlyData.months)
+                alpha = 1.0;
+                lineWidth = style.plotLineWidth * 0.8;
+            else
+                alpha = 0.3;
+                lineWidth = style.plotLineWidth * 0.5;
+            end
+            
+            % Plot cumulative curve
+            h = plot(hoursOfDay, cumPercent, '-', ...
+                'LineWidth', lineWidth, ...
+                'Color', [colorMap(monthIdx, :) alpha], ...
+                'DisplayName', legendStr);
+            plotHandles = [plotHandles, h];
+        end
+    end
+    
+    % Add cutoff visualization based on mode
+    switch cutoffType
+        case 'sunset'
+            if ~isempty(markerData)
+                % Draw markers at each month's sunset point
+                for i = 1:size(markerData, 1)
+                    mHour = markerData(i, 1);
+                    mPct = markerData(i, 2);
+                    mIdx = markerData(i, 3);
+                    
+                    if mIdx == length(monthlyHourlyData.months)
+                        mSize = 15;
+                    else
+                        mSize = 10;
+                    end
+                    
+                    plot(mHour, mPct, 'o', 'MarkerSize', mSize, ...
+                        'MarkerFaceColor', colorMap(mIdx, :), ...
+                        'MarkerEdgeColor', 'k', ...
+                        'HandleVisibility', 'off');
+                end
+                
+                % Add shaded region showing sunset range
+                minSunset = min(markerData(:, 1));
+                maxSunset = max(markerData(:, 1));
+                if maxSunset > minSunset
+                    xPatch = [minSunset, maxSunset, maxSunset, minSunset];
+                    yPatch = [0, 0, 105, 105];
+                    patch(xPatch, yPatch, [1 0.9 0.7], 'FaceAlpha', 0.2, 'EdgeColor', 'none', ...
+                        'HandleVisibility', 'off');
+                end
+            end
+            
+        case 'threshold'
+            % Draw horizontal line at threshold percentage
+            yline(thresholdPct, '--', 'Color', [0.5 0.5 0.5], 'LineWidth', 2, ...
+                'Label', sprintf('%d%% threshold', thresholdPct), 'LabelHorizontalAlignment', 'left', ...
+                'FontSize', style.axisFontSize);
+            
+            if ~isempty(markerData)
+                % Draw markers at each month's threshold crossing
+                for i = 1:size(markerData, 1)
+                    mHour = markerData(i, 1);
+                    mPct = markerData(i, 2);
+                    mIdx = markerData(i, 3);
+                    
+                    if mIdx == length(monthlyHourlyData.months)
+                        mSize = 15;
+                    else
+                        mSize = 10;
+                    end
+                    
+                    plot(mHour, mPct, 'o', 'MarkerSize', mSize, ...
+                        'MarkerFaceColor', colorMap(mIdx, :), ...
+                        'MarkerEdgeColor', 'k', ...
+                        'HandleVisibility', 'off');
+                end
+                
+                % Add shaded region showing time range
+                minHour = min(markerData(:, 1));
+                maxHour = max(markerData(:, 1));
+                if maxHour > minHour
+                    xPatch = [minHour, maxHour, maxHour, minHour];
+                    yPatch = [0, 0, 105, 105];
+                    patch(xPatch, yPatch, [0.7 0.9 1.0], 'FaceAlpha', 0.2, 'EdgeColor', 'none', ...
+                        'HandleVisibility', 'off');
+                end
+            end
+            
+        otherwise  % 'fixed'
+            xline(fixedCutoffHour, '--', 'Color', [0.5 0.5 0.5], 'LineWidth', 2, ...
+                'Label', sprintf('%d:00 cutoff', fixedCutoffHour), 'LabelVerticalAlignment', 'bottom', ...
+                'FontSize', style.axisFontSize);
+    end
+    
+    % Add horizontal reference lines
+    yline(50, ':', 'Color', [0.7 0.7 0.7], 'LineWidth', 1);
+    yline(75, ':', 'Color', [0.7 0.7 0.7], 'LineWidth', 1);
+    
+    % Format plot
+    ylabel('Cumulative % of Daily Total', 'FontSize', style.labelFontSize + 2, 'FontWeight', 'bold');
+    xlabel('Time of Day', 'FontSize', style.labelFontSize);
+    
+    switch cutoffType
+        case 'sunset'
+            titleStr = sprintf('%s Cumulative %% of Daily %s - Sunset Cutoff (%s)', dayType, analysis.modeDisplayString, locationName);
+        case 'threshold'
+            titleStr = sprintf('%s Cumulative %% of Daily %s - %d%% Threshold (%s)', dayType, analysis.modeDisplayString, thresholdPct, locationName);
+        otherwise
+            titleStr = sprintf('%s Cumulative %% of Daily %s (%s)', dayType, analysis.modeDisplayString, locationName);
+    end
+    title(titleStr, 'FontSize', style.titleFontSize);
+    
+    set(gca, 'Color', style.axisBackgroundColor);
+    set(gca, 'FontSize', style.axisFontSize);
+    grid on;
+    
+    xlim([0 24]);
+    ylim([0 105]);
+    xticks(0:4:24);
+    xticklabels({'00:00', '04:00', '08:00', '12:00', '16:00', '20:00', '24:00'});
+    yticks(0:10:100);
+    
+    % Add legend
+    if ~isempty(plotHandles)
+        legend(plotHandles, 'Location', 'southeast', 'Color', style.axisBackgroundColor, ...
+            'FontSize', style.legendFontSize);
+    end
+    
+    hold off
+end
+
+function pct = interpolatePercentage(hoursOfDay, cumPercent, targetHour)
+    % Interpolate to find percentage at a specific hour
+    idx = find(hoursOfDay <= targetHour, 1, 'last');
+    if isempty(idx)
+        pct = 0;
+    elseif idx < length(hoursOfDay) && hoursOfDay(idx) < targetHour
+        % Linear interpolation
+        h1 = hoursOfDay(idx);
+        h2 = hoursOfDay(idx + 1);
+        p1 = cumPercent(idx);
+        p2 = cumPercent(idx + 1);
+        pct = p1 + (p2 - p1) * (targetHour - h1) / (h2 - h1);
+    else
+        pct = cumPercent(idx);
+    end
+end
+
+function hr = interpolateHour(hoursOfDay, cumPercent, targetPct)
+    % Interpolate to find hour at which a specific percentage is reached
+    idx = find(cumPercent >= targetPct, 1, 'first');
+    if isempty(idx)
+        hr = 24;  % Never reached
+    elseif idx == 1
+        hr = hoursOfDay(1);
+    else
+        % Linear interpolation
+        h1 = hoursOfDay(idx - 1);
+        h2 = hoursOfDay(idx);
+        p1 = cumPercent(idx - 1);
+        p2 = cumPercent(idx);
+        if p2 > p1
+            hr = h1 + (h2 - h1) * (targetPct - p1) / (p2 - p1);
+        else
+            hr = h2;
+        end
+    end
+end
+
+function timeStr = decimalHourToHHMM(decimalHour)
+    % Convert decimal hours (e.g., 17.7) to HH:MM format (e.g., "17:42")
+    hours = floor(decimalHour);
+    minutes = round((decimalHour - hours) * 60);
+    % Handle edge case where rounding gives 60 minutes
+    if minutes >= 60
+        hours = hours + 1;
+        minutes = 0;
+    end
+    timeStr = sprintf('%d:%02d', hours, minutes);
+end
+
+function plotHourlyHeatmap(monthlyHourlyData, analysis, plots, style, locationName, dayType, monthlySunsets)
+    % Plot a heatmap of hourly counts by month
+    % Rows: months, Columns: hours (0-23)
+    % Color intensity: normalized or absolute count depending on settings
+    %
+    % cutoffType options:
+    %   'fixed' - single vertical line at cutoffHour
+    %   'sunset' - stepped line following average sunset per month
+    %   'threshold' - stepped line at hour when cutoffThresholdPct is reached
+    
+    % Get normalization setting
+    normalizeRows = true;  % Default to normalized
+    if isfield(plots, 'heatmapNormalization') && strcmp(plots.heatmapNormalization, 'none')
+        normalizeRows = false;
+    end
+    
+    % Determine cutoff mode
+    cutoffType = 'fixed';
+    if isfield(plots, 'cutoffType')
+        cutoffType = plots.cutoffType;
+    end
+    
+    % Get parameters
+    fixedCutoffHour = 15;
+    if isfield(plots, 'cutoffHour')
+        fixedCutoffHour = plots.cutoffHour;
+    end
+    
+    thresholdPct = 90;
+    if isfield(plots, 'cutoffThresholdPct')
+        thresholdPct = plots.cutoffThresholdPct;
+    end
+    
+    % Set figure name based on normalization and cutoff type
+    if normalizeRows
+        figSuffix = 'Normalized';
+    else
+        figSuffix = 'Absolute';
+    end
+    switch cutoffType
+        case 'sunset'
+            figSuffix = [figSuffix ' - Sunset Cutoff'];
+        case 'threshold'
+            figSuffix = [figSuffix sprintf(' - %d%% Threshold', thresholdPct)];
+    end
+    
+    figure('Name', [analysis.modeDisplayString ' - Heatmap ' figSuffix ' - ' dayType ' - ' locationName], ...
+        'NumberTitle', 'off', 'Position', [408 126 1132 921]);
+    
+    % Determine which patterns to use
+    if strcmp(dayType, 'Weekdays')
+        patterns = monthlyHourlyData.weekdayPatterns;
+        times = monthlyHourlyData.weekdayTimes;
+    else
+        patterns = monthlyHourlyData.weekendPatterns;
+        times = monthlyHourlyData.weekendTimes;
+    end
+    
+    % Build matrix of hourly values (rows=months, cols=hours)
+    numMonths = length(monthlyHourlyData.months);
+    hourlyMatrix = nan(numMonths, 24);
+    monthLabels = cell(numMonths, 1);
+    dailyTotals = nan(numMonths, 1);
+    sunsetHours = nan(numMonths, 1);  % Store sunset hour for each month
+    thresholdHours = nan(numMonths, 1);  % Store hour when threshold is reached
+    
+    for monthIdx = 1:numMonths
+        if ~isempty(patterns{monthIdx}) && ~isempty(times{monthIdx})
+            patternData = patterns{monthIdx};
+            timeData = times{monthIdx};
+            
+            % Convert duration times to hours
+            hoursOfDay = hours(timeData);
+            
+            % Place values in correct hour columns
+            for h = 1:length(hoursOfDay)
+                hourCol = round(hoursOfDay(h)) + 1;  % 0-23 -> 1-24
+                if hourCol >= 1 && hourCol <= 24
+                    hourlyMatrix(monthIdx, hourCol) = patternData(h);
+                end
+            end
+            
+            dailyTotals(monthIdx) = sum(patternData);
+            
+            % Calculate threshold hour for this month
+            if strcmp(cutoffType, 'threshold')
+                [sortedHours, sortIdx] = sort(hoursOfDay);
+                sortedPattern = patternData(sortIdx);
+                cumSum = cumsum(sortedPattern);
+                cumPercent = 100 * cumSum / sum(sortedPattern);
+                thresholdHours(monthIdx) = interpolateHour(sortedHours, cumPercent, thresholdPct);
+            end
+        end
+        monthLabels{monthIdx} = datestr(monthlyHourlyData.months(monthIdx), 'mmm yyyy');
+        
+        % Get sunset time for this month if available
+        if nargin >= 7 && isKey(monthlySunsets, monthLabels{monthIdx})
+            sunsetHours(monthIdx) = monthlySunsets(monthLabels{monthIdx});
+        end
+    end
+    
+    % Apply normalization if requested
+    if normalizeRows
+        % Normalize each row (month) by its mean for shape comparison
+        displayMatrix = hourlyMatrix;
+        for monthIdx = 1:numMonths
+            rowMean = nanmean(hourlyMatrix(monthIdx, :));
+            if rowMean > 0
+                displayMatrix(monthIdx, :) = 100 * hourlyMatrix(monthIdx, :) / rowMean;
+            end
+        end
+        colorbarLabel = 'Normalized Count (mean = 100)';
+        titleNormSuffix = 'Normalized';
+    else
+        % Show absolute values
+        displayMatrix = hourlyMatrix;
+        colorbarLabel = 'Average Hourly Count';
+        titleNormSuffix = 'Absolute';
+    end
+    
+    % Create heatmap
+    hImg = imagesc(displayMatrix);
+    set(hImg, 'AlphaData', ~isnan(displayMatrix));  % Make NaN transparent
+    
+    % Use a good colormap for this visualization
+    colormap(gca, parula);
+    
+    % Add colorbar
+    cb = colorbar;
+    cb.Label.String = colorbarLabel;
+    cb.Label.FontSize = style.labelFontSize;
+    
+    % Format axes
+    set(gca, 'YTick', 1:numMonths);
+    set(gca, 'YTickLabel', monthLabels);
+    set(gca, 'XTick', 1:24);
+    set(gca, 'XTickLabel', 0:23);
+    
+    % Add daily totals as secondary y-axis labels
+    % Create right-side labels showing daily totals
+    yyaxis right
+    set(gca, 'YTick', 1:numMonths);
+    dailyTotalLabels = arrayfun(@(x) sprintf('%s/day', num2sepstr(x, '%.0f')), dailyTotals, 'UniformOutput', false);
+    set(gca, 'YTickLabel', dailyTotalLabels);
+    set(gca, 'YColor', 'k');
+    ylim([0.5 numMonths+0.5]);
+    yyaxis left
+    ylim([0.5 numMonths+0.5]);
+    
+    % Labels and title
+    xlabel('Hour of Day', 'FontSize', style.labelFontSize);
+    ylabel('Month', 'FontSize', style.labelFontSize);
+    
+    switch cutoffType
+        case 'sunset'
+            titleCutoffSuffix = ' - Sunset Cutoff';
+        case 'threshold'
+            titleCutoffSuffix = sprintf(' - %d%% Threshold', thresholdPct);
+        otherwise
+            titleCutoffSuffix = '';
+    end
+    title(sprintf('%s Hourly %s Heatmap - %s%s (%s)', dayType, analysis.modeDisplayString, titleNormSuffix, titleCutoffSuffix, locationName), ...
+        'FontSize', style.titleFontSize);
+    
+    set(gca, 'FontSize', style.axisFontSize);
+    
+    % Add cutoff line(s) based on mode
+    hold on
+    switch cutoffType
+        case 'sunset'
+            if any(~isnan(sunsetHours))
+                drawSteppedCutoffLine(sunsetHours, numMonths, [1 0.3 0]);
+            end
+            
+        case 'threshold'
+            if any(~isnan(thresholdHours))
+                drawSteppedCutoffLine(thresholdHours, numMonths, [0 0.5 1]);
+            end
+            
+        otherwise  % 'fixed'
+            xline(fixedCutoffHour + 0.5, '--', 'Color', 'r', 'LineWidth', 2, ...
+                'Label', sprintf('%d:00', fixedCutoffHour), 'LabelVerticalAlignment', 'top', ...
+                'FontSize', style.axisFontSize - 2);
+    end
+    hold off
+end
+
+function drawSteppedCutoffLine(cutoffHours, numMonths, lineColor)
+    % Draw a stepped line following cutoff hours across months
+    for monthIdx = 1:numMonths
+        if ~isnan(cutoffHours(monthIdx))
+            xPos = cutoffHours(monthIdx) + 0.5;
+            yStart = monthIdx - 0.5;
+            yEnd = monthIdx + 0.5;
+            plot([xPos xPos], [yStart yEnd], '-', 'Color', lineColor, 'LineWidth', 2.5);
+        end
+    end
+    
+    % Connect with horizontal lines
+    for monthIdx = 1:(numMonths-1)
+        if ~isnan(cutoffHours(monthIdx)) && ~isnan(cutoffHours(monthIdx+1))
+            x1 = cutoffHours(monthIdx) + 0.5;
+            x2 = cutoffHours(monthIdx+1) + 0.5;
+            yPos = monthIdx + 0.5;
+            plot([x1 x2], [yPos yPos], '-', 'Color', lineColor, 'LineWidth', 2.5);
+        end
+    end
 end
 
 function inputTable = detectAndHandleOutliers(inputTable, analysis)
@@ -3250,11 +3908,12 @@ function plotCombinedHourlyRaw(locationData, weatherData, analysis, plots, style
                 offsetHours = (i-1) * 0.1;  % 6-minute offset per location
                 offsetTimes = hourlyData.dateTimes + hours(offsetHours);
                 
+                adjustedLabel = getAdjustedSourceLabel(locationInfo);
                 h2 = plot(offsetTimes, hourlyData.adjustedCounts, '.', ...
                     'MarkerSize', 2, ...
                     'Color', locationInfo.plotColor * 0.7, ...
-                    'DisplayName', sprintf('%s Telraam Corrected (n=%d, range: %s-%s)', ...
-                        locationInfo.name, ...
+                    'DisplayName', sprintf('%s %s (n=%d, range: %s-%s)', ...
+                        locationInfo.name, adjustedLabel, ...
                         length(hourlyData.adjustedCounts), ...
                         num2sepstr(min(hourlyData.adjustedCounts), '%.0f'), ...
                         num2sepstr(max(hourlyData.adjustedCounts), '%.0f')));
@@ -6567,13 +7226,151 @@ function evoTable = convertEvoToTelraamFormat(rawEvoTable, analysis)
     evoTable.yearOfMondayInWeek(januaryIndicesToChange) = evoTable.yearOfMondayInWeek(januaryIndicesToChange) - 1;
     evoTable.yearWeekKey = evoTable.yearOfMondayInWeek + evoTable.weekOfYear./100;
     
-    % ZELT Evo doesn't need uptime or daylight corrections
-    % Set adjusted counts equal to raw counts
+    % Apply the same daylight correction ratios as Telraam for testing purposes
+    % This allows ZELT to serve as a control: we can compare the corrected estimate
+    % (based on pre-3pm counts × ratio) against the actual 24-hour total (raw)
     evoTable.AdjustedCountsUptime = evoTable.('Bike Total');
-    evoTable.AdjustedCountsUptimeDaylight = evoTable.('Bike Total');
+    
+    % Apply weekday/weekend correction ratios (same as Telraam)
+    evoTable.AdjustedCountsUptimeDaylight = evoTable.AdjustedCountsUptime;
+    weekdayRows = evoTable.isWeekday;
+    evoTable.AdjustedCountsUptimeDaylight(weekdayRows) = ...
+        evoTable.AdjustedCountsUptime(weekdayRows) .* analysis.daylightCorrectionRatioWD;
+    evoTable.AdjustedCountsUptimeDaylight(~weekdayRows) = ...
+        evoTable.AdjustedCountsUptime(~weekdayRows) .* analysis.daylightCorrectionRatioWE;
     
     % Convert to timetable for compatibility
     evoTable = table2timetable(evoTable);
+end
+
+function [ratioWD, ratioWE] = computeDaylightCorrectionRatios(data, analysis)
+    % Compute daylight correction ratios from ground truth period data
+    %
+    % Uses data from a period when daylight extends well past the cutoff time
+    % (typically June-July when sunsets are latest) to determine the ratio
+    % between total daily counts and pre-cutoff counts.
+    %
+    % The ratio is computed as:
+    %   ratio = sum(total_daily_counts) / sum(pre_cutoff_counts)
+    % This is more robust than averaging individual day ratios because it
+    % avoids issues with days that have very low pre-cutoff counts.
+    %
+    % Parameters:
+    %   data - timetable with hourly count data (must have 24-hour coverage)
+    %   analysis - analysis configuration with groundTruthPeriod and truncationCutoffTime
+    %
+    % Returns:
+    %   ratioWD - weekday correction ratio
+    %   ratioWE - weekend correction ratio
+    
+    % Default to NaN if computation fails
+    ratioWD = NaN;
+    ratioWE = NaN;
+    
+    % Get ground truth period parameters
+    gtStartMonth = analysis.groundTruthPeriod.startMonth;
+    gtEndMonth = analysis.groundTruthPeriod.endMonth;
+    gtYear = analysis.groundTruthPeriod.year;
+    cutoffTime = analysis.truncationCutoffTime;
+    
+    % Define ground truth date range
+    gtStart = datetime(gtYear, gtStartMonth, 1);
+    gtEnd = dateshift(datetime(gtYear, gtEndMonth, 1), 'end', 'month');
+    
+    fprintf('Ground truth period: %s to %s\n', datestr(gtStart, 'dd-mmm-yyyy'), datestr(gtEnd, 'dd-mmm-yyyy'));
+    fprintf('Cutoff time: %s\n', datestr(cutoffTime, 'HH:MM'));
+    
+    % Filter data to ground truth period
+    dateTimes = data.('Date and Time (Local)');
+    inGroundTruth = dateTimes >= gtStart & dateTimes <= gtEnd;
+    gtData = data(inGroundTruth, :);
+    
+    if isempty(gtData) || height(gtData) < 24
+        warning('Insufficient data in ground truth period. Need at least 24 hours.');
+        return;
+    end
+    
+    fprintf('Ground truth observations: %d hours\n', height(gtData));
+    
+    % Add day grouping
+    gtData.DayOnly = dateshift(gtData.('Date and Time (Local)'), 'start', 'day');
+    
+    % Get counts for the mode being analyzed
+    modeString = analysis.modeString;
+    if ~ismember(modeString, gtData.Properties.VariableNames)
+        warning('Mode %s not found in data.', modeString);
+        return;
+    end
+    
+    % Separate pre-cutoff and all data
+    timeOfDay = timeofday(gtData.('Date and Time (Local)'));
+    preCutoff = timeOfDay <= cutoffTime;
+    
+    % Calculate daily totals and pre-cutoff totals
+    % Total counts per day
+    totalByDay = groupsummary(gtData, 'DayOnly', 'sum', modeString);
+    totalByDay.Properties.VariableNames{end} = 'TotalCount';
+    
+    % Pre-cutoff counts per day
+    preCutoffData = gtData(preCutoff, :);
+    preCutoffByDay = groupsummary(preCutoffData, 'DayOnly', 'sum', modeString);
+    preCutoffByDay.Properties.VariableNames{end} = 'PreCutoffCount';
+    
+    % Merge the two tables
+    dailyData = innerjoin(totalByDay(:, {'DayOnly', 'TotalCount'}), ...
+                          preCutoffByDay(:, {'DayOnly', 'PreCutoffCount'}), ...
+                          'Keys', 'DayOnly');
+    
+    % Add weekday indicator
+    dailyData.isWeekday = ~isweekend(dailyData.DayOnly);
+    
+    % Filter out days with very low counts (unreliable ratios)
+    minDailyCount = 10;
+    validDays = dailyData.TotalCount >= minDailyCount & dailyData.PreCutoffCount > 0;
+    dailyData = dailyData(validDays, :);
+    
+    if isempty(dailyData)
+        warning('No valid days found in ground truth period after filtering.');
+        return;
+    end
+    
+    % Separate weekdays and weekends
+    weekdayData = dailyData(dailyData.isWeekday, :);
+    weekendData = dailyData(~dailyData.isWeekday, :);
+    
+    % Compute ratios using sum method (more robust)
+    % Ratio = sum(all daily totals) / sum(all pre-cutoff totals)
+    if ~isempty(weekdayData) && sum(weekdayData.PreCutoffCount) > 0
+        ratioWD = sum(weekdayData.TotalCount) / sum(weekdayData.PreCutoffCount);
+        
+        % Also compute individual day ratios for reporting
+        individualRatiosWD = weekdayData.TotalCount ./ weekdayData.PreCutoffCount;
+        fprintf('\nWeekday statistics (%d days):\n', height(weekdayData));
+        fprintf('  Total counts: %s\n', num2sepstr(sum(weekdayData.TotalCount), '%.0f'));
+        fprintf('  Pre-cutoff counts: %s\n', num2sepstr(sum(weekdayData.PreCutoffCount), '%.0f'));
+        fprintf('  Computed ratio (sum method): %.3f\n', ratioWD);
+        fprintf('  Individual day ratios: mean=%.3f, median=%.3f, std=%.3f\n', ...
+            mean(individualRatiosWD), median(individualRatiosWD), std(individualRatiosWD));
+    else
+        warning('Insufficient weekday data for ratio computation.');
+    end
+    
+    if ~isempty(weekendData) && sum(weekendData.PreCutoffCount) > 0
+        ratioWE = sum(weekendData.TotalCount) / sum(weekendData.PreCutoffCount);
+        
+        % Also compute individual day ratios for reporting
+        individualRatiosWE = weekendData.TotalCount ./ weekendData.PreCutoffCount;
+        fprintf('\nWeekend statistics (%d days):\n', height(weekendData));
+        fprintf('  Total counts: %s\n', num2sepstr(sum(weekendData.TotalCount), '%.0f'));
+        fprintf('  Pre-cutoff counts: %s\n', num2sepstr(sum(weekendData.PreCutoffCount), '%.0f'));
+        fprintf('  Computed ratio (sum method): %.3f\n', ratioWE);
+        fprintf('  Individual day ratios: mean=%.3f, median=%.3f, std=%.3f\n', ...
+            mean(individualRatiosWE), median(individualRatiosWE), std(individualRatiosWE));
+    else
+        warning('Insufficient weekend data for ratio computation.');
+    end
+    
+    fprintf('\n');
 end
 
 function sourceLabel = getSourceLabel(locationInfo)
@@ -6583,7 +7380,7 @@ function sourceLabel = getSourceLabel(locationInfo)
     if isfield(locationInfo, 'source')
         source = locationInfo.source;
         if strcmp(source, 'Telraam')
-            sourceLabel = 'Telraam Raw';  % Distinguish from ZELT Evo and potential Telraam Corrected
+            sourceLabel = 'Telraam Raw';  % Distinguish from ZELT Evo and potential Telraam Adjusted
         elseif strcmp(source, 'ZELT Evo')
             sourceLabel = 'ZELT Evo';  % Eco-Compteur ZELT Evo inductive loop counter
         else
@@ -6591,6 +7388,23 @@ function sourceLabel = getSourceLabel(locationInfo)
         end
     else
         sourceLabel = 'Telraam Raw';  % Default to Telraam Raw if no source specified
+    end
+end
+
+function sourceLabel = getAdjustedSourceLabel(locationInfo)
+    % Generate a source label for adjusted counts in plot legends
+    
+    if isfield(locationInfo, 'source')
+        source = locationInfo.source;
+        if strcmp(source, 'Telraam')
+            sourceLabel = 'Telraam Adjusted';
+        elseif strcmp(source, 'ZELT Evo')
+            sourceLabel = 'ZELT Evo Adjusted';
+        else
+            sourceLabel = [source ' Adjusted'];
+        end
+    else
+        sourceLabel = 'Telraam Adjusted';  % Default
     end
 end
 
