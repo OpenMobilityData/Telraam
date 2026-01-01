@@ -48,7 +48,7 @@ modeString = 'Bike Total'; modeDisplayString = 'Bike Counts';
 
 analysis = struct( ...
     'startTime', datetime(2024,08,15,00,00,01), ...
-    'endTime', datetime(2025,12,14,23,59,59), ...
+    'endTime', datetime(2025,12,31,23,59,59), ...
     'modeString', modeString, ...
     'modeDisplayString', modeDisplayString, ...
     'uptimeThreshold', 0.0, ...
@@ -82,7 +82,7 @@ analysis = struct( ...
 %dateSpan = 'September2025';
 %dateSpan = 'fullMonthsWest';
 %dateSpan = 'fullMonthsEast';
-dateSpan = 'access2info1';
+%dateSpan = 'access2info1';
 
 if exist('dateSpan', 'var')
     if strcmp(dateSpan,'winter')
@@ -104,8 +104,7 @@ if exist('dateSpan', 'var')
         analysis.startTime = datetime(2025,09,01,00,00,01);
         analysis.endTime = datetime(2025,09,31,23,59,59);
     elseif strcmp(dateSpan,'access2info1')
-        %analysis.startTime = datetime(2025,07,26,00,00,01);
-        analysis.startTime = datetime(2025,08,01,00,00,01);
+        analysis.startTime = datetime(2025,07,26,00,00,01);
         analysis.endTime = datetime(2025,11,15,23,59,59);
     elseif strcmp(dateSpan,'fullMonthsWest')
         analysis.startTime = datetime(2024,09,01,00,00,01);
@@ -143,7 +142,7 @@ plots = struct( ...
     'heatmapNormalization', 'row', ...  % 'row' (normalize each month) or 'none' (absolute)
     'cutoffType', 'threshold', ...  % 'fixed', 'sunset', or 'threshold'
     'cutoffHour', 15, ...  % Hour for fixed cutoff (3pm = 15)
-    'cutoffThresholdPct', 99.0 ...  % Percentage threshold for 'threshold' mode
+    'cutoffThresholdPct', 90.0 ...  % Percentage threshold for 'threshold' mode
 );
 
 % Plotting style parameters
