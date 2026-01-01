@@ -533,9 +533,9 @@ function plotCombinedDaily(locationData, weatherData, analysis, plots, style)
                 'Color', locationInfo.plotColor, ...
                 'DisplayName', sprintf('%s %s ( Min = %s ; Max = %s ; Total = %s )', ...
                     locationInfo.name, sourceLabel, ...
-                    num2sepstr(min(dailyData.rawCounts), '%.0f'), ...
-                    num2sepstr(max(dailyData.rawCounts), '%.0f'), ...
-                    num2sepstr(sum(dailyData.rawCounts), '%.0f')));
+                    num2sepstr(min(dailyData.rawCounts, [], 'omitnan'), '%.0f'), ...
+                    num2sepstr(max(dailyData.rawCounts, [], 'omitnan'), '%.0f'), ...
+                    num2sepstr(sum(dailyData.rawCounts, 'omitnan'), '%.0f')));
             plotHandles = [plotHandles, h1];
         end
         
@@ -547,9 +547,9 @@ function plotCombinedDaily(locationData, weatherData, analysis, plots, style)
                 'Color', locationInfo.plotColor * 0.7, ...
                 'DisplayName', sprintf('%s %s ( Min = %s ; Max = %s ; Total = %s )', ...
                     locationInfo.name, adjustedLabel, ...
-                    num2sepstr(min(dailyData.adjustedCounts), '%.0f'), ...
-                    num2sepstr(max(dailyData.adjustedCounts), '%.0f'), ...
-                    num2sepstr(sum(dailyData.adjustedCounts), '%.0f')));
+                    num2sepstr(min(dailyData.adjustedCounts, [], 'omitnan'), '%.0f'), ...
+                    num2sepstr(max(dailyData.adjustedCounts, [], 'omitnan'), '%.0f'), ...
+                    num2sepstr(sum(dailyData.adjustedCounts, 'omitnan'), '%.0f')));
             plotHandles = [plotHandles, h2];
         end
     end
@@ -587,32 +587,39 @@ function dailyData = calculateDailyTotals(locationDataStruct, analysis)
     % Also get daylight data counts per day to identify days with no daylight data
     daylightGrouped = groupsummary(data, 'DayOnly', 'sum', 'Daylight');
     
-    % Combine results
-    dailyData = struct();
-    dailyData.dates = groupedData.DayOnly;
-    
     % Use the original column name with groupsummary's 'sum_' prefix
     sumColumnName = ['sum_' analysis.modeString];
-    dailyData.rawCounts = groupedData.(sumColumnName);
-    
-    % Match adjusted counts to raw count dates
-    [~, ia, ib] = intersect(groupedData.DayOnly, adjustedGrouped.DayOnly);
-    adjustedCounts = nan(size(dailyData.rawCounts));
-    adjustedCounts(ia) = adjustedGrouped.sum_AdjustedCountsUptimeDaylight(ib);
-    
-    % Ensure adjusted is at least as large as raw
-    dailyData.adjustedCounts = max(dailyData.rawCounts, adjustedCounts);
     
     % Filter out days with no daylight data (sum_Daylight = 0)
     [~, ic, id] = intersect(groupedData.DayOnly, daylightGrouped.DayOnly);
-    daylightCounts = zeros(size(dailyData.rawCounts));
+    daylightCounts = zeros(height(groupedData), 1);
     daylightCounts(ic) = daylightGrouped.sum_Daylight(id);
     
     % Keep only days that have some daylight data
     validDays = daylightCounts > 0;
-    dailyData.dates = dailyData.dates(validDays);
-    dailyData.rawCounts = dailyData.rawCounts(validDays);
-    dailyData.adjustedCounts = dailyData.adjustedCounts(validDays);
+    groupedData = groupedData(validDays, :);
+    
+    % Create continuous date range from first to last valid day
+    % This ensures missing days appear as gaps (NaN) in plots
+    allDates = (min(groupedData.DayOnly):days(1):max(groupedData.DayOnly))';
+    
+    % Initialize output with NaN (missing days will remain NaN, creating plot gaps)
+    dailyData = struct();
+    dailyData.dates = allDates;
+    dailyData.rawCounts = nan(size(allDates));
+    dailyData.adjustedCounts = nan(size(allDates));
+    
+    % Fill in raw counts where we have data
+    [~, ia, ib] = intersect(allDates, groupedData.DayOnly);
+    dailyData.rawCounts(ia) = groupedData.(sumColumnName)(ib);
+    
+    % Fill in adjusted counts where we have data
+    [~, ic2, id2] = intersect(allDates, adjustedGrouped.DayOnly);
+    adjustedCounts = nan(size(allDates));
+    adjustedCounts(ic2) = adjustedGrouped.sum_AdjustedCountsUptimeDaylight(id2);
+    
+    % Ensure adjusted is at least as large as raw (where both exist)
+    dailyData.adjustedCounts = max(dailyData.rawCounts, adjustedCounts);
 end
 
 function weatherHandles = plotWeatherData(weatherData, plots, style)
@@ -1377,9 +1384,9 @@ function plotMultiModalDaily(locationData, weatherData, analysis, plots, style, 
                 'Color', currentColor, ...
                 'DisplayName', sprintf('%s ( Min = %s ; Max = %s ; Total = %s )', ...
                     currentModeDisplay, ...
-                    num2sepstr(min(dailyData.rawCounts), '%.0f'), ...
-                    num2sepstr(max(dailyData.rawCounts), '%.0f'), ...
-                    num2sepstr(sum(dailyData.rawCounts), '%.0f')));
+                    num2sepstr(min(dailyData.rawCounts, [], 'omitnan'), '%.0f'), ...
+                    num2sepstr(max(dailyData.rawCounts, [], 'omitnan'), '%.0f'), ...
+                    num2sepstr(sum(dailyData.rawCounts, 'omitnan'), '%.0f')));
             plotHandles = [plotHandles, h1];
         end
     end
@@ -6500,7 +6507,7 @@ function plotYearOverYearDaily(locationData, analysis, style, modality, location
                 'DisplayName', sprintf('%s (n=%d days, total=%s)', ...
                     yearPeriods(i).label, ...
                     length(yearPeriods(i).normalizedDates), ...
-                    num2sepstr(sum(yearPeriods(i).counts), '%.0f')));
+                    num2sepstr(sum(yearPeriods(i).counts, 'omitnan'), '%.0f')));
             plotHandles = [plotHandles, h];
         end
     end
