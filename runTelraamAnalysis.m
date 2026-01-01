@@ -303,6 +303,9 @@ plotHourlyCountHistogram(filteredLocationData, analysis, style);
 %% Analyze Zero Count Intervals
 analyzeZeroCountIntervals(filteredLocationData, analysis);
 
+%% Analyze Data Outages (missing hourly time bins)
+analyzeDataOutages(locationData, analysis);
+
 %% Optional: Visualize Zero Intervals
 % Uncomment to create a visual plot of zero intervals
 %plotZeroIntervalAnalysis(filteredLocationData, analysis, style);
@@ -4873,6 +4876,254 @@ function reportZeroIntervals(longestInterval, allIntervals, stats, locationName,
         end
     else
         fprintf('  No zero intervals found - there was at least one count in every hour!\n');
+    end
+end
+
+function analyzeDataOutages(locationData, analysis)
+    % Analyze missing hourly time bins (data outages) across all locations
+    % and cross-reference counts from other Telraam counters during outages
+    %
+    % IMPORTANT: This detects MISSING DATA (no time bin records), not zero counts.
+    % A day where the sensor recorded zero bikes is NOT an outage - it's valid data.
+    % An outage is when the sensor failed to report any data at all.
+    
+    fprintf('\n=== Data Outage Analysis (Missing Time Bins vs Zero Counts) ===\n');
+    fprintf('NOTE: Outages = missing data records. Zero-count days = valid low-traffic data.\n');
+    
+    locationNames = fieldnames(locationData);
+    
+    % Filter to only Telraam sources for cross-referencing
+    telraamLocations = {};
+    telraamLocationNames = {};
+    for i = 1:length(locationNames)
+        locationName = locationNames{i};
+        locationInfo = locationData.(locationName).locationInfo;
+        if isfield(locationInfo, 'source') && strcmp(locationInfo.source, 'Telraam')
+            telraamLocations{end+1} = locationData.(locationName);
+            telraamLocationNames{end+1} = locationInfo.name;
+        end
+    end
+    
+    % Analyze each location
+    for i = 1:length(locationNames)
+        locationName = locationNames{i};
+        data = locationData.(locationName);
+        locationInfo = data.locationInfo;
+        
+        fprintf('\n--- Location: %s (%s) ---\n', locationInfo.name, locationInfo.source);
+        
+        % Find outages for this location
+        [outages, stats] = findDataOutages(data, analysis);
+        
+        % Report outage statistics
+        reportOutageStats(stats, locationInfo.name);
+        
+        % Report individual outages and cross-reference with other Telraam counters
+        if ~isempty(outages)
+            reportOutagesWithCrossReference(outages, locationInfo, telraamLocations, telraamLocationNames, analysis);
+        end
+    end
+    
+    fprintf('\n');
+end
+
+function [outages, stats] = findDataOutages(locationDataStruct, analysis)
+    % Find gaps in hourly data coverage (TRUE OUTAGES)
+    % 
+    % IMPORTANT DISTINCTION:
+    %   - Missing time bin: No row exists in the data for that hour/day (sensor outage)
+    %   - Zero count: A row exists but the count value is 0 (legitimate low traffic)
+    %
+    % This function detects MISSING TIME BINS, not zero counts.
+    % A day with zero bikes but valid data records is NOT an outage.
+    
+    data = locationDataStruct.data;
+    dateTimes = data.('Date and Time (Local)');
+    
+    % Get the expected date range from the data
+    startDate = dateshift(min(dateTimes), 'start', 'day');
+    endDate = dateshift(max(dateTimes), 'start', 'day');
+    
+    % Create expected daily time bins
+    expectedDays = (startDate:days(1):endDate)';
+    
+    % Find which days have ANY data records (regardless of count values)
+    % This checks for the EXISTENCE of rows, not the VALUES in those rows
+    actualDays = unique(dateshift(dateTimes, 'start', 'day'));
+    [~, presentIdx] = ismember(expectedDays, actualDays);
+    missingDayMask = (presentIdx == 0);  % TRUE = no data records exist for this day
+    
+    % Find contiguous outage periods (consecutive missing days)
+    outages = [];
+    if any(missingDayMask)
+        % Find start and end indices of missing day runs
+        missingStarts = find(diff([0; missingDayMask]) == 1);
+        missingEnds = find(diff([missingDayMask; 0]) == -1);
+        
+        for j = 1:length(missingStarts)
+            startIdx = missingStarts(j);
+            endIdx = missingEnds(j);
+            
+            outage = struct();
+            outage.startTime = expectedDays(startIdx);
+            outage.endTime = expectedDays(endIdx) + hours(23) + minutes(59); % End of last missing day
+            outage.missingDays = endIdx - startIdx + 1;
+            outage.missingHours = outage.missingDays * 16; % Approx daylight hours (6AM-10PM)
+            
+            outages = [outages; outage];
+        end
+    end
+    
+    % Calculate hourly statistics for reporting
+    expectedHours = (dateshift(min(dateTimes), 'start', 'hour'):hours(1):dateshift(max(dateTimes), 'start', 'hour'))';
+    actualHours = dateshift(dateTimes, 'start', 'hour');
+    [~, presentHourIdx] = ismember(expectedHours, actualHours);
+    missingHourMask = (presentHourIdx == 0);  % TRUE = no data record exists for this hour
+    
+    % Filter for daylight hours only (6 AM to 9 PM)
+    hourOfDay = hour(expectedHours);
+    daylightMask = (hourOfDay >= 6) & (hourOfDay <= 21);
+    missingDaylightMask = missingHourMask & daylightMask;
+    
+    % Calculate zero-count statistics (for comparison - these are NOT outages)
+    % This helps distinguish between "no data" vs "data shows zero traffic"
+    if ismember(analysis.modeString, data.Properties.VariableNames)
+        counts = data.(analysis.modeString);
+        zeroDays = unique(dateshift(dateTimes(counts == 0), 'start', 'day'));
+        % Days with ONLY zero counts (all records for that day are zero)
+        daysWithData = unique(dateshift(dateTimes, 'start', 'day'));
+        zeroOnlyDays = 0;
+        for d = 1:length(daysWithData)
+            dayData = counts(dateshift(dateTimes, 'start', 'day') == daysWithData(d));
+            if all(dayData == 0)
+                zeroOnlyDays = zeroOnlyDays + 1;
+            end
+        end
+    else
+        zeroOnlyDays = 0;
+    end
+    
+    % Calculate statistics
+    stats = struct();
+    stats.totalExpectedDays = length(expectedDays);
+    stats.totalExpectedDaylightHours = sum(daylightMask);
+    stats.totalMissingDaylightHours = sum(missingDaylightMask);
+    stats.percentMissing = 100 * stats.totalMissingDaylightHours / max(1, stats.totalExpectedDaylightHours);
+    stats.numOutages = length(outages);
+    stats.totalMissingDays = sum(missingDayMask);
+    stats.zeroCountDays = zeroOnlyDays;  % Days with data but all counts are zero
+    
+    if ~isempty(outages)
+        stats.totalOutageDays = sum([outages.missingDays]);
+        stats.longestOutageDays = max([outages.missingDays]);
+        stats.avgOutageDays = mean([outages.missingDays]);
+    else
+        stats.totalOutageDays = 0;
+        stats.longestOutageDays = 0;
+        stats.avgOutageDays = 0;
+    end
+end
+
+function reportOutageStats(stats, locationName)
+    % Report summary statistics for data outages
+    % Distinguishes between missing data (outages) and zero-count days (valid data)
+    
+    fprintf('  Date range spans %d days\n', stats.totalExpectedDays);
+    fprintf('  Days with missing data (no time bins): %d\n', stats.totalMissingDays);
+    fprintf('  Days with data but zero counts: %d (NOT outages - valid low-traffic days)\n', stats.zeroCountDays);
+    fprintf('  Expected daylight hours (6AM-9PM): %s\n', num2sepstr(stats.totalExpectedDaylightHours, '%.0f'));
+    fprintf('  Missing daylight hours: %s (%.2f%%)\n', ...
+        num2sepstr(stats.totalMissingDaylightHours, '%.0f'), stats.percentMissing);
+    fprintf('  Number of distinct outage periods: %d\n', stats.numOutages);
+    
+    if stats.numOutages > 0
+        fprintf('  Longest outage: %d days\n', stats.longestOutageDays);
+        fprintf('  Average outage duration: %.1f days\n', stats.avgOutageDays);
+    end
+end
+
+function reportOutagesWithCrossReference(outages, locationInfo, telraamLocations, telraamLocationNames, analysis)
+    % Report individual outages with cross-reference to other Telraam counters
+    
+    % Filter to significant outages (>= 2 days)
+    significantOutages = outages([outages.missingDays] >= 2);
+    
+    if isempty(significantOutages)
+        fprintf('  No prolonged outages (>=2 days) detected.\n');
+        return;
+    end
+    
+    fprintf('\n  PROLONGED OUTAGES (>=2 days):\n');
+    
+    % Sort by duration (longest first)
+    [~, sortIdx] = sort([significantOutages.missingDays], 'descend');
+    significantOutages = significantOutages(sortIdx);
+    
+    for i = 1:length(significantOutages)
+        outage = significantOutages(i);
+        
+        fprintf('\n  Outage #%d:\n', i);
+        fprintf('    Start: %s\n', datestr(outage.startTime, 'dd-mmm-yyyy'));
+        fprintf('    End:   %s\n', datestr(outage.endTime, 'dd-mmm-yyyy'));
+        fprintf('    Duration: %d days (~%d daylight hours)\n', outage.missingDays, outage.missingHours);
+        
+        % Cross-reference with other Telraam counters
+        fprintf('    Counts at other Telraam locations during this outage:\n');
+        
+        foundOtherData = false;
+        for j = 1:length(telraamLocations)
+            otherLocationName = telraamLocationNames{j};
+            
+            % Skip if this is the same location
+            if strcmp(otherLocationName, locationInfo.name)
+                continue;
+            end
+            
+            otherData = telraamLocations{j}.data;
+            otherDateTimes = otherData.('Date and Time (Local)');
+            
+            % Find data within the outage period
+            inOutagePeriod = (otherDateTimes >= outage.startTime) & (otherDateTimes <= outage.endTime);
+            
+            if any(inOutagePeriod)
+                outageData = otherData(inOutagePeriod, :);
+                
+                % Sum counts for the mode being analyzed
+                if ismember(analysis.modeString, outageData.Properties.VariableNames)
+                    totalCounts = sum(outageData.(analysis.modeString), 'omitnan');
+                    numHours = height(outageData);
+                    numDays = length(unique(dateshift(outageData.('Date and Time (Local)'), 'start', 'day')));
+                    avgPerDay = totalCounts / max(1, numDays);
+                    
+                    fprintf('      %s: %s total %s (%d days of data, avg %.1f/day)\n', ...
+                        otherLocationName, ...
+                        num2sepstr(totalCounts, '%.0f'), ...
+                        analysis.modeDisplayString, ...
+                        numDays, ...
+                        avgPerDay);
+                    foundOtherData = true;
+                end
+            end
+        end
+        
+        if ~foundOtherData
+            fprintf('      (No other Telraam data available during this period)\n');
+        end
+    end
+    
+    % Also report single-day outages summary
+    singleDayOutages = outages([outages.missingDays] == 1);
+    if ~isempty(singleDayOutages)
+        fprintf('\n  SINGLE-DAY OUTAGES: %d occurrences\n', length(singleDayOutages));
+        % Show up to 10
+        numToShow = min(10, length(singleDayOutages));
+        for i = 1:numToShow
+            outage = singleDayOutages(i);
+            fprintf('    - %s\n', datestr(outage.startTime, 'dd-mmm-yyyy'));
+        end
+        if length(singleDayOutages) > numToShow
+            fprintf('    ... and %d more\n', length(singleDayOutages) - numToShow);
+        end
     end
 end
 
