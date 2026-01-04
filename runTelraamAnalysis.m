@@ -397,6 +397,12 @@ plotYearOverYearComparisons(locationData, analysis, style, locationTarget);
 locationTarget = easternSegmentName;
 plotYearOverYearComparisons(locationData, analysis, style, locationTarget);
 
+%% Generate Motor Vehicle Day vs Night Comparison Plots
+% Shows classified (Cars+Trucks) vs all motor vehicles (Cars+Trucks+Night)
+% to visualize the contribution of nighttime unclassified counts
+telraamLocationData = filterLocationDataBySource(locationData, 'Telraam');
+plotMotorVehicleDayNightComparison(telraamLocationData, analysis, style);
+
 %% ======================== FUNCTIONS ========================
 
 function inputTable = loadSingleLocationData(location, analysis)
@@ -6726,6 +6732,463 @@ function plotYearOverYearComparisons(locationData, analysis, style, locationSpec
     end
     
     fprintf('Year-over-year comparison plots complete.\n\n');
+end
+
+function plotMotorVehicleDayNightComparison(locationData, analysis, style)
+    % Generate comparison plots showing classified motor vehicles (Cars+Trucks)
+    % versus all motor vehicles (Cars+Trucks+Night) for each Telraam location.
+    % This visualizes the contribution of nighttime unclassified counts.
+    % Generates daily, weekly, and monthly time scale plots.
+    % Excludes partial months at the start and end of the data range.
+    %
+    % Inputs:
+    %   locationData - structure containing data for Telraam locations
+    %   analysis - analysis configuration structure
+    %   style - plotting style configuration structure
+    
+    fprintf('\n=== Generating Motor Vehicle Day vs Night Comparison Plots ===\n');
+    
+    locationNames = fieldnames(locationData);
+    
+    for locIdx = 1:length(locationNames)
+        locationFieldName = locationNames{locIdx};
+        locationInfo = locationData.(locationFieldName).locationInfo;
+        data = locationData.(locationFieldName).data;
+        
+        fprintf('Generating day/night comparison for: %s\n', locationInfo.name);
+        
+        % Filter out partial months at start and end
+        filteredData = filterToCompleteMonths(data);
+        
+        if isempty(filteredData) || height(filteredData) == 0
+            fprintf('  No complete months of data available for %s\n', locationInfo.name);
+            continue;
+        end
+        
+        % Generate daily plot
+        plotDayNightDaily(filteredData, locationInfo, style);
+        
+        % Generate weekly plot
+        plotDayNightWeekly(filteredData, locationInfo, style);
+        
+        % Generate monthly plot
+        plotDayNightMonthly(filteredData, locationInfo, style);
+    end
+    
+    fprintf('Motor vehicle day/night comparison plots complete.\n\n');
+end
+
+function filteredData = filterToCompleteMonths(data)
+    % Filter data to include only complete months
+    % Removes partial months at the beginning and end of the data range
+    
+    if isempty(data) || height(data) == 0
+        filteredData = data;
+        return;
+    end
+    
+    % Get the date range
+    dates = data.('Date and Time (Local)');
+    minDate = min(dates);
+    maxDate = max(dates);
+    
+    % Find the first complete month start
+    % If data starts on the 1st, use that month; otherwise start next month
+    if day(minDate) == 1 && hour(minDate) == 0
+        firstCompleteMonthStart = dateshift(minDate, 'start', 'month');
+    else
+        firstCompleteMonthStart = dateshift(minDate, 'start', 'month') + calmonths(1);
+    end
+    
+    % Find the last complete month end
+    % Check if we have data through the end of the last month
+    lastMonthStart = dateshift(maxDate, 'start', 'month');
+    lastMonthEnd = dateshift(lastMonthStart, 'end', 'month');
+    
+    % If maxDate is the last day of the month (with some tolerance for time), include that month
+    if day(maxDate) >= day(lastMonthEnd) - 1
+        lastCompleteMonthEnd = lastMonthEnd + hours(23) + minutes(59) + seconds(59);
+    else
+        % Otherwise, end at the previous month
+        lastCompleteMonthEnd = lastMonthStart - seconds(1);
+    end
+    
+    % Filter data to complete months only
+    filteredData = data(dates >= firstCompleteMonthStart & dates <= lastCompleteMonthEnd, :);
+    
+    % Report the filtering
+    if height(filteredData) < height(data)
+        fprintf('  Filtered to complete months: %s to %s\n', ...
+            datestr(firstCompleteMonthStart, 'mmm yyyy'), ...
+            datestr(dateshift(lastCompleteMonthEnd, 'start', 'month'), 'mmm yyyy'));
+        fprintf('  Removed %d observations from partial months\n', ...
+            height(data) - height(filteredData));
+    end
+end
+
+function plotDayNightDaily(data, locationInfo, style)
+    % Generate daily day/night comparison plot
+    
+    dailyData = calculateDayNightDailyTotals(data);
+    
+    if isempty(dailyData.dates)
+        fprintf('  No daily data available for %s\n', locationInfo.name);
+        return;
+    end
+    
+    % Create figure
+    figure('Name', ['Motor Vehicle Day/Night Daily - ' locationInfo.name], ...
+           'NumberTitle', 'off', 'Position', [408 126 1200 700]);
+    hold on;
+    
+    % Plot classified counts (Cars + Trucks)
+    h1 = plot(dailyData.dates, dailyData.classifiedCounts, '-', ...
+        'LineWidth', style.plotLineWidth * 0.4, ...
+        'Color', [0.2 0.5 0.8], ...
+        'DisplayName', sprintf('Cars + Trucks (Classified) - Total: %s', ...
+            num2sepstr(sum(dailyData.classifiedCounts, 'omitnan'), '%.0f')));
+    
+    % Plot all motor vehicle counts (Cars + Trucks + Night)
+    h2 = plot(dailyData.dates, dailyData.allMotorCounts, '-', ...
+        'LineWidth', style.plotLineWidth * 0.4, ...
+        'Color', [0.8 0.3 0.2], ...
+        'DisplayName', sprintf('Cars + Trucks + Night (All) - Total: %s', ...
+            num2sepstr(sum(dailyData.allMotorCounts, 'omitnan'), '%.0f')));
+    
+    % Calculate statistics
+    totalClassified = sum(dailyData.classifiedCounts, 'omitnan');
+    totalAll = sum(dailyData.allMotorCounts, 'omitnan');
+    totalNight = totalAll - totalClassified;
+    pctIncrease = 100 * totalNight / totalClassified;
+    
+    % Format plot
+    formatDayNightComparisonPlot(locationInfo.name, style, [h1, h2], pctIncrease, 'Daily');
+    
+    hold off;
+    
+    fprintf('  Daily - Classified: %s, All: %s, Night adds: %.1f%%\n', ...
+        num2sepstr(totalClassified, '%.0f'), num2sepstr(totalAll, '%.0f'), pctIncrease);
+end
+
+function plotDayNightWeekly(data, locationInfo, style)
+    % Generate weekly day/night comparison plot
+    
+    weeklyData = calculateDayNightWeeklyTotals(data);
+    
+    if isempty(weeklyData.weekStarts)
+        fprintf('  No weekly data available for %s\n', locationInfo.name);
+        return;
+    end
+    
+    % Create figure
+    figure('Name', ['Motor Vehicle Day/Night Weekly - ' locationInfo.name], ...
+           'NumberTitle', 'off', 'Position', [408 126 1200 700]);
+    hold on;
+    
+    % Plot classified counts (Cars + Trucks)
+    h1 = plot(weeklyData.weekStarts, weeklyData.classifiedCounts, '-o', ...
+        'LineWidth', style.plotLineWidth * 0.5, ...
+        'MarkerSize', 4, ...
+        'Color', [0.2 0.5 0.8], ...
+        'MarkerFaceColor', [0.2 0.5 0.8], ...
+        'DisplayName', sprintf('Cars + Trucks (Classified) - Total: %s', ...
+            num2sepstr(sum(weeklyData.classifiedCounts, 'omitnan'), '%.0f')));
+    
+    % Plot all motor vehicle counts (Cars + Trucks + Night)
+    h2 = plot(weeklyData.weekStarts, weeklyData.allMotorCounts, '-o', ...
+        'LineWidth', style.plotLineWidth * 0.5, ...
+        'MarkerSize', 4, ...
+        'Color', [0.8 0.3 0.2], ...
+        'MarkerFaceColor', [0.8 0.3 0.2], ...
+        'DisplayName', sprintf('Cars + Trucks + Night (All) - Total: %s', ...
+            num2sepstr(sum(weeklyData.allMotorCounts, 'omitnan'), '%.0f')));
+    
+    % Calculate statistics
+    totalClassified = sum(weeklyData.classifiedCounts, 'omitnan');
+    totalAll = sum(weeklyData.allMotorCounts, 'omitnan');
+    totalNight = totalAll - totalClassified;
+    pctIncrease = 100 * totalNight / totalClassified;
+    
+    % Format plot
+    formatDayNightComparisonPlot(locationInfo.name, style, [h1, h2], pctIncrease, 'Weekly');
+    
+    hold off;
+    
+    fprintf('  Weekly - Classified: %s, All: %s, Night adds: %.1f%%\n', ...
+        num2sepstr(totalClassified, '%.0f'), num2sepstr(totalAll, '%.0f'), pctIncrease);
+end
+
+function plotDayNightMonthly(data, locationInfo, style)
+    % Generate monthly day/night comparison plot
+    
+    monthlyData = calculateDayNightMonthlyTotals(data);
+    
+    if isempty(monthlyData.monthStarts)
+        fprintf('  No monthly data available for %s\n', locationInfo.name);
+        return;
+    end
+    
+    % Create figure
+    figure('Name', ['Motor Vehicle Day/Night Monthly - ' locationInfo.name], ...
+           'NumberTitle', 'off', 'Position', [408 126 1200 700]);
+    hold on;
+    
+    % Plot classified counts (Cars + Trucks)
+    h1 = plot(monthlyData.monthStarts, monthlyData.classifiedCounts, '-o', ...
+        'LineWidth', style.plotLineWidth * 0.6, ...
+        'MarkerSize', 6, ...
+        'Color', [0.2 0.5 0.8], ...
+        'MarkerFaceColor', [0.2 0.5 0.8], ...
+        'DisplayName', sprintf('Cars + Trucks (Classified) - Total: %s', ...
+            num2sepstr(sum(monthlyData.classifiedCounts, 'omitnan'), '%.0f')));
+    
+    % Plot all motor vehicle counts (Cars + Trucks + Night)
+    h2 = plot(monthlyData.monthStarts, monthlyData.allMotorCounts, '-o', ...
+        'LineWidth', style.plotLineWidth * 0.6, ...
+        'MarkerSize', 6, ...
+        'Color', [0.8 0.3 0.2], ...
+        'MarkerFaceColor', [0.8 0.3 0.2], ...
+        'DisplayName', sprintf('Cars + Trucks + Night (All) - Total: %s', ...
+            num2sepstr(sum(monthlyData.allMotorCounts, 'omitnan'), '%.0f')));
+    
+    % Calculate statistics
+    totalClassified = sum(monthlyData.classifiedCounts, 'omitnan');
+    totalAll = sum(monthlyData.allMotorCounts, 'omitnan');
+    totalNight = totalAll - totalClassified;
+    pctIncrease = 100 * totalNight / totalClassified;
+    
+    % Format plot
+    formatDayNightComparisonPlot(locationInfo.name, style, [h1, h2], pctIncrease, 'Monthly');
+    
+    hold off;
+    
+    fprintf('  Monthly - Classified: %s, All: %s, Night adds: %.1f%%\n', ...
+        num2sepstr(totalClassified, '%.0f'), num2sepstr(totalAll, '%.0f'), pctIncrease);
+end
+
+function dailyData = calculateDayNightDailyTotals(data)
+    % Calculate daily totals for both classified and all motor vehicles
+    
+    dailyData = struct();
+    dailyData.dates = [];
+    dailyData.classifiedCounts = [];
+    dailyData.allMotorCounts = [];
+    
+    if isempty(data) || height(data) == 0
+        return;
+    end
+    
+    % Create daily grouping
+    data.DayOnly = dateshift(data.('Date and Time (Local)'), 'start', 'day');
+    
+    % Check for required columns
+    requiredCols = {'Car Total', 'Large vehicle Total', 'Motor Vehicle Total'};
+    for i = 1:length(requiredCols)
+        if ~ismember(requiredCols{i}, data.Properties.VariableNames)
+            warning('Column %s not found in data', requiredCols{i});
+            return;
+        end
+    end
+    
+    % Calculate classified counts (Cars + Trucks)
+    data.ClassifiedMotor = data.('Car Total') + data.('Large vehicle Total');
+    
+    % Group by day
+    classifiedGrouped = groupsummary(data, 'DayOnly', 'sum', 'ClassifiedMotor');
+    classifiedGrouped.Properties.VariableNames{end} = 'ClassifiedCount';
+    
+    allMotorGrouped = groupsummary(data, 'DayOnly', 'sum', 'Motor Vehicle Total');
+    allMotorGrouped.Properties.VariableNames{end} = 'AllMotorCount';
+    
+    daylightGrouped = groupsummary(data, 'DayOnly', 'sum', 'Daylight');
+    
+    % Merge all data
+    mergedData = innerjoin(classifiedGrouped(:, {'DayOnly', 'ClassifiedCount'}), ...
+                           allMotorGrouped(:, {'DayOnly', 'AllMotorCount'}), ...
+                           'Keys', 'DayOnly');
+    mergedData = innerjoin(mergedData, daylightGrouped(:, {'DayOnly', 'sum_Daylight'}), ...
+                           'Keys', 'DayOnly');
+    
+    % Filter to days with some daylight data
+    validDays = mergedData.sum_Daylight > 0;
+    mergedData = mergedData(validDays, :);
+    
+    if isempty(mergedData)
+        return;
+    end
+    
+    % Create continuous date range
+    allDates = (min(mergedData.DayOnly):days(1):max(mergedData.DayOnly))';
+    
+    dailyData.dates = allDates;
+    dailyData.classifiedCounts = nan(size(allDates));
+    dailyData.allMotorCounts = nan(size(allDates));
+    
+    [~, ia, ib] = intersect(allDates, mergedData.DayOnly);
+    dailyData.classifiedCounts(ia) = mergedData.ClassifiedCount(ib);
+    dailyData.allMotorCounts(ia) = mergedData.AllMotorCount(ib);
+end
+
+function weeklyData = calculateDayNightWeeklyTotals(data)
+    % Calculate weekly totals for both classified and all motor vehicles
+    
+    weeklyData = struct();
+    weeklyData.weekStarts = [];
+    weeklyData.classifiedCounts = [];
+    weeklyData.allMotorCounts = [];
+    
+    if isempty(data) || height(data) == 0
+        return;
+    end
+    
+    % Check for required columns
+    requiredCols = {'Car Total', 'Large vehicle Total', 'Motor Vehicle Total'};
+    for i = 1:length(requiredCols)
+        if ~ismember(requiredCols{i}, data.Properties.VariableNames)
+            warning('Column %s not found in data', requiredCols{i});
+            return;
+        end
+    end
+    
+    % Calculate classified counts (Cars + Trucks)
+    data.ClassifiedMotor = data.('Car Total') + data.('Large vehicle Total');
+    
+    % Use existing weekStartDateTimes column if available, otherwise create it
+    if ~ismember('weekStartDateTimes', data.Properties.VariableNames)
+        data.weekStartDateTimes = dateshift(dateshift(data.('Date and Time (Local)'), ...
+            'dayofweek', 'Monday', 'previous'), 'start', 'day');
+    end
+    
+    % Group by week
+    classifiedGrouped = groupsummary(data, 'weekStartDateTimes', 'sum', 'ClassifiedMotor');
+    classifiedGrouped.Properties.VariableNames{end} = 'ClassifiedCount';
+    
+    allMotorGrouped = groupsummary(data, 'weekStartDateTimes', 'sum', 'Motor Vehicle Total');
+    allMotorGrouped.Properties.VariableNames{end} = 'AllMotorCount';
+    
+    daylightGrouped = groupsummary(data, 'weekStartDateTimes', 'sum', 'Daylight');
+    
+    % Merge all data
+    mergedData = innerjoin(classifiedGrouped(:, {'weekStartDateTimes', 'ClassifiedCount'}), ...
+                           allMotorGrouped(:, {'weekStartDateTimes', 'AllMotorCount'}), ...
+                           'Keys', 'weekStartDateTimes');
+    mergedData = innerjoin(mergedData, daylightGrouped(:, {'weekStartDateTimes', 'sum_Daylight'}), ...
+                           'Keys', 'weekStartDateTimes');
+    
+    % Filter to weeks with some daylight data
+    validWeeks = mergedData.sum_Daylight > 0;
+    mergedData = mergedData(validWeeks, :);
+    
+    if isempty(mergedData)
+        return;
+    end
+    
+    % Sort by date
+    mergedData = sortrows(mergedData, 'weekStartDateTimes');
+    
+    weeklyData.weekStarts = mergedData.weekStartDateTimes;
+    weeklyData.classifiedCounts = mergedData.ClassifiedCount;
+    weeklyData.allMotorCounts = mergedData.AllMotorCount;
+end
+
+function monthlyData = calculateDayNightMonthlyTotals(data)
+    % Calculate monthly totals for both classified and all motor vehicles
+    
+    monthlyData = struct();
+    monthlyData.monthStarts = [];
+    monthlyData.classifiedCounts = [];
+    monthlyData.allMotorCounts = [];
+    
+    if isempty(data) || height(data) == 0
+        return;
+    end
+    
+    % Check for required columns
+    requiredCols = {'Car Total', 'Large vehicle Total', 'Motor Vehicle Total'};
+    for i = 1:length(requiredCols)
+        if ~ismember(requiredCols{i}, data.Properties.VariableNames)
+            warning('Column %s not found in data', requiredCols{i});
+            return;
+        end
+    end
+    
+    % Calculate classified counts (Cars + Trucks)
+    data.ClassifiedMotor = data.('Car Total') + data.('Large vehicle Total');
+    
+    % Create month grouping
+    data.MonthStart = dateshift(data.('Date and Time (Local)'), 'start', 'month');
+    
+    % Group by month
+    classifiedGrouped = groupsummary(data, 'MonthStart', 'sum', 'ClassifiedMotor');
+    classifiedGrouped.Properties.VariableNames{end} = 'ClassifiedCount';
+    
+    allMotorGrouped = groupsummary(data, 'MonthStart', 'sum', 'Motor Vehicle Total');
+    allMotorGrouped.Properties.VariableNames{end} = 'AllMotorCount';
+    
+    daylightGrouped = groupsummary(data, 'MonthStart', 'sum', 'Daylight');
+    
+    % Merge all data
+    mergedData = innerjoin(classifiedGrouped(:, {'MonthStart', 'ClassifiedCount'}), ...
+                           allMotorGrouped(:, {'MonthStart', 'AllMotorCount'}), ...
+                           'Keys', 'MonthStart');
+    mergedData = innerjoin(mergedData, daylightGrouped(:, {'MonthStart', 'sum_Daylight'}), ...
+                           'Keys', 'MonthStart');
+    
+    % Filter to months with some daylight data
+    validMonths = mergedData.sum_Daylight > 0;
+    mergedData = mergedData(validMonths, :);
+    
+    if isempty(mergedData)
+        return;
+    end
+    
+    % Sort by date
+    mergedData = sortrows(mergedData, 'MonthStart');
+    
+    monthlyData.monthStarts = mergedData.MonthStart;
+    monthlyData.classifiedCounts = mergedData.ClassifiedCount;
+    monthlyData.allMotorCounts = mergedData.AllMotorCount;
+end
+
+function formatDayNightComparisonPlot(locationName, style, plotHandles, pctIncrease, timeScale)
+    % Format the day/night comparison plot
+    %
+    % timeScale: 'Daily', 'Weekly', or 'Monthly'
+    
+    ylabel([timeScale ' Motor Vehicle Counts'], 'FontSize', style.labelFontSize, 'FontWeight', 'bold');
+    
+    if strcmp(timeScale, 'Weekly')
+        xlabel('Week Starting', 'FontSize', style.labelFontSize);
+    elseif strcmp(timeScale, 'Monthly')
+        xlabel('Month', 'FontSize', style.labelFontSize);
+    else
+        xlabel('Date', 'FontSize', style.labelFontSize);
+    end
+    
+    title(sprintf('%s Motor Vehicle Counts: Classified vs All (Including Night)', timeScale), ...
+        'FontSize', style.titleFontSize);
+    subtitle(sprintf('Location: %s | Night counts add %.1f%% to classified totals', ...
+        locationName, pctIncrease), ...
+        'FontSize', style.axisFontSize, 'Color', [0.3 0.3 0.3]);
+    
+    set(gca, 'Color', style.axisBackgroundColor);
+    set(gca, 'FontSize', style.axisFontSize);
+    grid on;
+    xtickangle(45);
+    
+    % Ensure y-axis starts at 0
+    ylim([0 max(ylim) * 1.1]);
+    
+    % Format y-axis with separators
+    ytick_positions = yticks;
+    ytick_labels = arrayfun(@(v) num2sepstr(v, '%.0f'), ytick_positions, 'UniformOutput', false);
+    yticklabels(ytick_labels);
+    
+    % Add legend
+    if ~isempty(plotHandles)
+        legend(plotHandles, 'Location', 'best', 'Color', style.axisBackgroundColor, ...
+            'FontSize', style.legendFontSize);
+    end
 end
 
 function plotYearOverYearDaily(locationData, analysis, style, modality, locationSpecifier)
