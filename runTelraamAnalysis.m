@@ -413,6 +413,14 @@ function inputTable = loadSingleLocationData(location, analysis)
     inputTable2025 = inputTable2025(:,columnsToKeep);
     
     combinedTable = vertcat(inputTable2024, inputTable2025);
+    
+    % Add derived Motor Vehicle Total column (Cars + Trucks + Night counts)
+    % This provides a more complete count of motor vehicles including
+    % unclassified nighttime detections
+    combinedTable.('Motor Vehicle Total') = combinedTable.('Car Total') + ...
+                                            combinedTable.('Large vehicle Total') + ...
+                                            combinedTable.('Night Total');
+    
     inputTable = table2timetable(combinedTable);
     
     % Apply date range filter
@@ -6695,6 +6703,7 @@ function plotYearOverYearComparisons(locationData, analysis, style, locationSpec
         struct('columnName', 'Bike Total', 'displayName', 'Bike Counts', 'color', [0.2, 0.6, 0.2]);
         struct('columnName', 'Pedestrian Total', 'displayName', 'Pedestrian Counts', 'color', [0.8, 0.4, 0.2]);
         struct('columnName', 'Car Total', 'displayName', 'Car Counts', 'color', [0.6, 0.6, 0.6]);
+        struct('columnName', 'Motor Vehicle Total', 'displayName', 'Motor Vehicle Counts (All)', 'color', [0.4, 0.4, 0.5]);
     };
     
     % Generate plots for each modality
@@ -6996,13 +7005,13 @@ function formatYearOverYearPlotDaily(modalityName, style, plotHandles, locationL
     set(gca, 'FontSize', style.axisFontSize);
     grid on;
     
-    % Format y-axis with separators
+    % Ensure y-axis starts at 0 (do this BEFORE formatting tick labels)
+    ylim([0 max(ylim) * 1.1]);
+    
+    % Format y-axis with separators (after ylim is set so ticks are correct)
     ytick_positions = yticks;
     ytick_labels = arrayfun(@(v) num2sepstr(v, '%.0f'), ytick_positions, 'UniformOutput', false);
     yticklabels(ytick_labels);
-    
-    % Ensure y-axis starts at 0
-    ylim([0 max(ylim) * 1.1]);
     
     % Add legend
     if ~isempty(plotHandles)
@@ -7047,13 +7056,13 @@ function formatYearOverYearPlotWeekly(modalityName, style, plotHandles, location
     set(gca, 'FontSize', style.axisFontSize);
     grid on;
     
-    % Format y-axis with separators
+    % Ensure y-axis starts at 0 (do this BEFORE formatting tick labels)
+    ylim([0 max(ylim) * 1.1]);
+    
+    % Format y-axis with separators (after ylim is set so ticks are correct)
     ytick_positions = yticks;
     ytick_labels = arrayfun(@(v) num2sepstr(v, '%.0f'), ytick_positions, 'UniformOutput', false);
     yticklabels(ytick_labels);
-    
-    % Ensure y-axis starts at 0
-    ylim([0 max(ylim) * 1.1]);
     
     % Add legend
     if ~isempty(plotHandles)
@@ -7093,13 +7102,13 @@ function formatYearOverYearPlotMonthly(modalityName, style, plotHandles, locatio
     set(gca, 'FontSize', style.axisFontSize);
     grid on;
     
-    % Format y-axis with separators
+    % Ensure y-axis starts at 0 (do this BEFORE formatting tick labels)
+    ylim([0 max(ylim) * 1.1]);
+    
+    % Format y-axis with separators (after ylim is set so ticks are correct)
     ytick_positions = yticks;
     ytick_labels = arrayfun(@(v) num2sepstr(v, '%.0f'), ytick_positions, 'UniformOutput', false);
     yticklabels(ytick_labels);
-    
-    % Ensure y-axis starts at 0
-    ylim([0 max(ylim) * 1.1]);
     
     % Add legend
     if ~isempty(plotHandles)
@@ -7463,6 +7472,13 @@ function evoTable = convertEvoToTelraamFormat(rawEvoTable, analysis)
     end
     evoTable.('Large vehicle Total') = zeros(n, 1);
     evoTable.('Night Total') = zeros(n, 1);  % ZELT Evo counts 24/7
+    
+    % Add derived Motor Vehicle Total column (Cars + Trucks + Night counts)
+    % For ZELT Evo this will just be Car Total since Trucks and Night are zero
+    evoTable.('Motor Vehicle Total') = evoTable.('Car Total') + ...
+                                       evoTable.('Large vehicle Total') + ...
+                                       evoTable.('Night Total');
+    
     evoTable.('Speed V85 km/h') = nan(n, 1);  % Not available
     
     % Add temporal columns (matching addTemporalColumns)
